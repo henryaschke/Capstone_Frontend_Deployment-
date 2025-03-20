@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Routes, Route, Link, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import { LayoutDashboard, LineChart, History, Battery, Calendar, Download, HelpCircle, Book, Lightbulb, AlertCircle, Zap, Clock, Globe, Sparkles, Search, CalendarDays, LogIn, UserPlus, LogOut, User } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart as RechartsLineChart, Line, Legend, ReferenceLine, Label } from 'recharts';
@@ -8,7 +8,7 @@ import Dashboard from './pages/Dashboard';
 import ProtectedRoute from './components/ProtectedRoute';
 import SessionTimer from './components/SessionTimer';
 import { useAuth } from './context/AuthContext';
-import { logout } from './services/api';
+import { logout, fetchBatteryStatus } from './services/api';
 
 function App() {
   const location = useLocation();
@@ -36,6 +36,57 @@ function App() {
       setSessionTimeoutNotice(null);
     }
   }, [location]);
+
+  // Battery state
+  const [batteryState, setBatteryState] = useState({
+    level: 0, // percentage
+    history: [
+      { time: '12:00', level: 0 },
+      { time: '12:30', level: 0 },
+      { time: '13:00', level: 0 },
+    ],
+    capacity: {
+      total: 2.5, // MWh
+      usable: 2.0, // MWh
+      percentage: 80,
+    },
+    chargingState: 'idle' as 'charging' | 'discharging' | 'idle',
+    chargingRate: 0 // MWh per hour
+  });
+
+  // Fetch battery status
+  const fetchBatteryData = async () => {
+    try {
+      // Just use currentUser from context
+      const data = await fetchBatteryStatus();
+      
+      // Update battery state with new data
+      setBatteryState(prev => ({
+        ...prev,
+        level: data.level,
+        capacity: {
+          ...prev.capacity,
+          total: data.capacity?.total || prev.capacity.total,
+          usable: data.capacity?.usable || prev.capacity.usable
+        },
+        chargingState: data.charging_state || 'idle',
+        chargingRate: data.charging_rate || 0
+      }));
+    } catch (error) {
+      console.error('Error fetching battery status:', error);
+    }
+  };
+
+  // Fetch battery status initially and then every 30 seconds
+  useEffect(() => {
+    fetchBatteryData();
+    
+    const batteryStatusInterval = setInterval(() => {
+      fetchBatteryData();
+    }, 30000); // 30 seconds
+    
+    return () => clearInterval(batteryStatusInterval);
+  }, []);
 
   // Only render auth pages without header if on auth page
   if (isAuthPage) {

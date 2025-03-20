@@ -209,12 +209,26 @@ const PriceChart: React.FC<PriceChartProps> = ({ data }) => {
     console.log('Processed data length:', processedData?.length || 0);
   }, [data, processedData]);
   
-  // If no processed data, show a message
-  if (!processedData.length) {
+  // If there's no data, show an empty state message
+  if (!data || !Array.isArray(data) || data.length === 0) {
     return (
-      <div className="p-4 text-center bg-gray-800 rounded-lg">
-        <p className="text-gray-300">No valid data available for chart</p>
-        <p className="text-sm text-gray-400 mt-2">Check your data source or date range</p>
+      <div className="flex flex-col items-center justify-center h-64 w-full text-center p-4 rounded-lg bg-dark-800/30 border border-gray-700/30">
+        <div className="text-gray-400 mb-4">No price data available</div>
+        <div className="text-sm text-gray-500">
+          The server is not providing any price data at this time. Please check your connection or try again later.
+        </div>
+      </div>
+    );
+  }
+  
+  // If processedData is empty after processing (but data wasn't empty), also show an error
+  if (processedData.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 w-full text-center p-4 rounded-lg bg-dark-800/30 border border-gray-700/30">
+        <div className="text-gray-400 mb-4">Could not process price data</div>
+        <div className="text-sm text-gray-500">
+          The data received could not be processed. Please check the console for more details.
+        </div>
       </div>
     );
   }

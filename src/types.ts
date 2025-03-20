@@ -1,4 +1,4 @@
-export type Tab = 'dashboard1' | 'dashboard2' | 'history' | 'guide' | 'algorithm';
+export type Tab = 'dashboard1' | 'dashboard2' | 'history' | 'guide' | 'algorithm' | 'battery';
 
 export interface BatteryState {
   level: number;
@@ -11,6 +11,8 @@ export interface BatteryState {
     usable: number;
     percentage: number;
   };
+  chargingState?: 'charging' | 'discharging' | 'idle';
+  chargingRate?: number; // in MWh per hour, positive for charging, negative for discharging
 }
 
 export interface PriceData {
@@ -68,6 +70,7 @@ export interface Trade {
   averagePrice: number;
   closePrice: number;
   volume: number;
+  status?: 'pending' | 'executed' | 'failed' | 'completed' | 'cancelled';
 }
 
 export interface DateRange {

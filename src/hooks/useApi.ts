@@ -113,7 +113,7 @@ export const usePriceData = (startDate: string, endDate: string) => {
   const refetch = useCallback(
     throttle(() => {
       fetchData();
-    }, 5000),
+    }, 300000),
     [fetchData]
   );
 
@@ -133,8 +133,24 @@ export const useBatteryHistory = (days: number = 7) => {
   return useDataFetching<BatteryHistoryItem[]>(fetchBatteryHistory, days);
 };
 
-export const useTradeHistory = (startDate?: string, endDate?: string, tradeType?: 'buy' | 'sell') => {
-  return useDataFetching<Trade[]>(fetchTradeHistory, startDate, endDate, tradeType);
+export const useTradeHistory = (startDate?: string, endDate?: string, tradeType?: 'buy' | 'sell', status?: string) => {
+  // Use the correct Trade type from types.ts
+  const { data, loading, error, refetch } = useDataFetching<Trade[]>(
+    fetchTradeHistory, startDate, endDate, tradeType, status
+  );
+  
+  // Add a function to refetch without date constraints
+  const refetchAll = useCallback(() => {
+    return fetchTradeHistory(undefined, undefined, tradeType, status);
+  }, [tradeType, status]);
+  
+  return { 
+    data, 
+    loading, 
+    error, 
+    refetch,
+    refetchAll  // Add the new function to the returned object
+  };
 };
 
 export const usePerformanceMetrics = (startDate?: string, endDate?: string) => {

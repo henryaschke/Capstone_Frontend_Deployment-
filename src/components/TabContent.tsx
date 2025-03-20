@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { LayoutDashboard, LineChart, History, Battery, Calendar, Download, HelpCircle, Book, Lightbulb, AlertCircle, Zap, Clock, Globe, Sparkles, Search, CalendarDays, Plus, BarChart2, Cpu, Database, HardDrive, RefreshCw, Filter, ChevronDown, ChevronUp } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart as RechartsLineChart, Line, Legend, ReferenceLine, Label } from 'recharts';
 import { BatteryVisualization } from './BatteryVisualization';
@@ -6,7 +6,8 @@ import { DateRangeFilter } from './DateRangeFilter';
 import { CustomTradeMarker } from './CustomTradeMarker';
 import PriceChart from './PriceChart';
 import type { Tab, BatteryState, PriceData, Trade, DateRange, MarketData, Forecast } from '../types';
-import { generateForecasts, formatForecasts, fetchSavedForecasts, SavedForecast } from '../services/api';
+import { generateForecasts, formatForecasts, fetchSavedForecasts, SavedForecast, executeTrade, TradeRequest, executeAllPendingTrades, cancelAllPendingTrades } from '../services/api';
+import { useTradeHistory, useTradeActions } from '../hooks/useApi';
 
 interface TabContentProps {
   activeTab: Tab;
@@ -266,7 +267,7 @@ export const TabContent: React.FC<TabContentProps> = ({
       }
     } catch (error) {
       console.error('Error running algorithm:', error);
-      setAlgorithmError('An error occurred while generating forecasts. Please try again.');
+      setAlgorithmError('An error occurred while generating forecasts. Please check server logs for details.');
     } finally {
       setAlgorithmLoading(false);
     }
@@ -323,6 +324,308 @@ export const TabContent: React.FC<TabContentProps> = ({
     </th>
   );
 
+  // Local state for filters
+  const [filters, setFilters] = useState({
+    type: '',
+    status: ''
+  });
+
+  // Custom hook integration for filtering
+  const { data: filteredTrades, loading: tradesLoading, refetch: refetchTrades, refetchAll } = 
+    useTradeHistory(
+      dateRange.start, 
+      dateRange.end, 
+      (filters.type as 'buy' | 'sell' | undefined), 
+      filters.status || undefined
+    );
+
+  // Handle filter changes
+  const handleFilterChange = useCallback((field: string, value: string) => {
+    setFilters(prev => ({ ...prev, [field]: value }));
+  }, []);
+
+  // Debug trades when tab is rendered
+  useEffect(() => {
+    console.log('Dashboard2 tab active');
+    console.log('Date range:', dateRange);
+    console.log('Filters:', filters);
+    console.log('Filtered trades:', filteredTrades);
+    console.log('All trades from props:', trades);
+    
+    // Only refetch when the tab becomes active or filters/date range change
+    if (activeTab === 'dashboard2') {
+      // Track if we're already fetching to prevent multiple simultaneous requests
+      const controller = new AbortController();
+      
+      console.log('Fetching trade history...');
+      refetchTrades();
+      
+      // Cleanup function to abort any in-progress requests
+      return () => {
+        controller.abort();
+      };
+    }
+    // Removed filteredTrades from dependency array to prevent infinite loop
+  }, [dateRange, filters, activeTab, refetchTrades]);
+
+  // Add state for buy and sell quantity inputs
+  const [buyQuantity, setBuyQuantity] = useState<number>(1);
+  const [sellQuantity, setSellQuantity] = useState<number>(1);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isExecutingPendingTrades, setIsExecutingPendingTrades] = useState(false);
+  const [isCancellingPendingTrades, setIsCancellingPendingTrades] = useState(false);
+  
+  // Function to handle buy order
+  const handleBuyOrder = async () => {
+    try {
+      setIsSubmitting(true);
+      
+      // Validate inputs
+      if (!buyQuantity || buyQuantity <= 0) {
+        alert('Please enter a valid quantity');
+        return;
+      }
+      
+      // Create ISO timestamp from the selected date and time
+      const executionDateTime = new Date(`${selectedTimeWindow.date}T${selectedTimeWindow.time}:00`);
+      
+      // Get current time plus 30 seconds (reduced from 5 minutes)
+      const minExecutionTime = new Date();
+      minExecutionTime.setSeconds(minExecutionTime.getSeconds() + 30);
+      
+      // Validate execution time is in the future with at least 30 seconds buffer
+      if (executionDateTime < minExecutionTime) {
+        alert('Execution time must be at least 30 seconds in the future');
+        return;
+      }
+      
+      // Get the resolution from the selectedTimeWindow.duration
+      const resolution = parseInt(selectedTimeWindow.duration);
+      
+      // Validate resolution is one of the valid options
+      if (![15, 30, 60].includes(resolution)) {
+        alert('Please select a valid duration (15, 30, or 60 minutes)');
+        return;
+      }
+      
+      // Call the executeTrade API with the trade request
+      const response = await executeTrade({
+        type: 'buy',
+        quantity: buyQuantity,
+        executionTime: executionDateTime.toISOString(),
+        resolution: resolution,
+        market: 'Germany',
+      } as TradeRequest);
+      
+      console.log('Trade execution response:', response);
+      
+      if (response && response.success) {
+        alert(`Buy order placed successfully! Trade ID: ${response.trade_id}`);
+        
+        // Immediately refetch both filtered trades and all trades to update the UI
+        await refetchTrades();
+        await refetchAll();
+      } else {
+        alert(`Failed to place buy order: ${response?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error executing buy trade:', error);
+      alert(`Error placing buy order: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  
+  // Function to handle sell order
+  const handleSellOrder = async () => {
+    try {
+      setIsSubmitting(true);
+      
+      // Validate inputs
+      if (!sellQuantity || sellQuantity <= 0) {
+        alert('Please enter a valid quantity');
+        return;
+      }
+      
+      // Check if there's enough energy in the battery for the sell order
+      const currentBatteryLevel = batteryState.level * batteryState.capacity.total / 100; // Convert from percentage to actual MWh
+      if (sellQuantity > currentBatteryLevel) {
+        alert(`Not enough energy in battery. Current level: ${currentBatteryLevel.toFixed(2)} MWh`);
+        return;
+      }
+      
+      // Create ISO timestamp from the selected date and time
+      const executionDateTime = new Date(`${selectedTimeWindow.date}T${selectedTimeWindow.time}:00`);
+      
+      // Get current time plus 30 seconds (reduced from 5 minutes)
+      const minExecutionTime = new Date();
+      minExecutionTime.setSeconds(minExecutionTime.getSeconds() + 30);
+      
+      // Validate execution time is in the future with at least 30 seconds buffer
+      if (executionDateTime < minExecutionTime) {
+        alert('Execution time must be at least 30 seconds in the future');
+        return;
+      }
+      
+      // Get the resolution from the selectedTimeWindow.duration
+      const resolution = parseInt(selectedTimeWindow.duration);
+      
+      // Validate resolution is one of the valid options
+      if (![15, 30, 60].includes(resolution)) {
+        alert('Please select a valid duration (15, 30, or 60 minutes)');
+        return;
+      }
+      
+      // Call the executeTrade API with the trade request
+      const response = await executeTrade({
+        type: 'sell',
+        quantity: sellQuantity,
+        executionTime: executionDateTime.toISOString(),
+        resolution: resolution,
+        market: 'Germany',
+      } as TradeRequest);
+      
+      console.log('Trade execution response:', response);
+      
+      if (response && response.success) {
+        alert(`Sell order placed successfully! Trade ID: ${response.trade_id}`);
+        
+        // Immediately refetch both filtered trades and all trades to update the UI
+        await refetchTrades();
+        await refetchAll();
+      } else {
+        alert(`Failed to place sell order: ${response?.message || 'Unknown error'}`);
+      }
+    } catch (error: any) {
+      console.error('Error executing sell trade:', error);
+      
+      // Extract detailed error message from Axios error response
+      let errorMessage = 'Unknown error occurred';
+      
+      if (error.response && error.response.data) {
+        // This handles FastAPI's error format which puts error details in data.detail
+        if (error.response.data.detail) {
+          errorMessage = error.response.data.detail;
+        } else {
+          // General error object
+          errorMessage = JSON.stringify(error.response.data);
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      alert(`Error placing sell order: ${errorMessage}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Function to execute all pending trades
+  const handleExecuteAllPendingTrades = async () => {
+    try {
+      setIsExecutingPendingTrades(true);
+      const response = await executeAllPendingTrades();
+      console.log('Execute all pending trades response:', response);
+      
+      if (response && response.success) {
+        const executed = response.executed_count || 0;
+        const failed = response.failed_count || 0;
+        const message = response.message || `Processed ${executed} trades`;
+        
+        // Display detailed results if available
+        if (response.results && response.results.length > 0) {
+          const failedTrades = response.results.filter((r: any) => !r.success);
+          if (failedTrades.length > 0) {
+            const failureReasons = failedTrades.map((t: any) => 
+              `Trade ID ${t.trade_id}: ${t.message}`
+            ).join('\n');
+            alert(`${message}\n\nFailed trades details:\n${failureReasons}`);
+          } else {
+            alert(message);
+          }
+        } else {
+          alert(message);
+        }
+        
+        // Refetch trades to update trade history
+        refetchTrades();
+      } else {
+        const errorMsg = response?.message || 'Failed to execute pending trades';
+        alert(`Error: ${errorMsg}`);
+      }
+    } catch (error: any) {
+      console.error('Error executing all pending trades:', error);
+      
+      let errorMessage = 'Unknown error occurred';
+      if (error.response && error.response.data) {
+        if (error.response.data.detail) {
+          errorMessage = error.response.data.detail;
+        } else {
+          errorMessage = JSON.stringify(error.response.data);
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      alert(`Error executing pending trades: ${errorMessage}`);
+    } finally {
+      setIsExecutingPendingTrades(false);
+    }
+  };
+
+  const handleCancelAllPendingTrades = async () => {
+    try {
+      setIsCancellingPendingTrades(true);
+      const response = await cancelAllPendingTrades();
+      console.log('Cancel all pending trades response:', response);
+      
+      if (response && response.success) {
+        const canceled = response.canceled_count || 0;
+        const failed = response.failed_count || 0;
+        const message = response.message || `Canceled ${canceled} trades`;
+        
+        // Display detailed results if available
+        if (response.results && response.results.length > 0) {
+          const failedTrades = response.results.filter((r: any) => !r.success);
+          if (failedTrades.length > 0) {
+            const failureReasons = failedTrades.map((t: any) => 
+              `Trade ID ${t.trade_id}: ${t.message}`
+            ).join('\n');
+            alert(`${message}\n\nFailed cancellations:\n${failureReasons}`);
+          } else {
+            alert(message);
+          }
+        } else {
+          alert(message);
+        }
+        
+        // Refetch trades to update trade history - use refetchAll instead of refetchTrades
+        // to get all trades regardless of date filter
+        refetchAll();
+      } else {
+        const errorMsg = response?.message || 'Failed to cancel pending trades';
+        alert(`Error: ${errorMsg}`);
+      }
+    } catch (error: any) {
+      console.error('Error canceling all pending trades:', error);
+      
+      let errorMessage = 'Unknown error occurred';
+      if (error.response && error.response.data) {
+        if (error.response.data.detail) {
+          errorMessage = error.response.data.detail;
+        } else {
+          errorMessage = JSON.stringify(error.response.data);
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      alert(`Error canceling pending trades: ${errorMessage}`);
+    } finally {
+      setIsCancellingPendingTrades(false);
+    }
+  };
+
   switch (activeTab) {
     case 'dashboard1':
       return (
@@ -330,32 +633,115 @@ export const TabContent: React.FC<TabContentProps> = ({
           <div className="glass-card rounded-lg p-6">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-white">Energy Price Data</h2>
-              <div className="flex items-center space-x-4">
-                <div className="text-sm text-gray-400">
-                  {priceData.length} data points available
+            </div>
+            
+            {/* Empty state message if no data */}
+            {(!priceData || priceData.length === 0) && (
+              <div className="flex flex-col items-center justify-center h-64 w-full text-center p-4 rounded-lg bg-dark-800/30 border border-gray-700/30">
+                <div className="text-gray-400 mb-4">No price data available</div>
+                <div className="text-sm text-gray-500">
+                  The server is not providing any price data at this time. Please check your connection or try again later.
                 </div>
+              </div>
+            )}
+            
+            {/* Only render PriceChart if we have data */}
+            {priceData && priceData.length > 0 && (
+              <PriceChart data={priceData} />
+            )}
+          </div>
+
+          <div className="glass-card rounded-lg p-6 mt-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-white">Pending Trades</h2>
+              <div className="flex space-x-2">
                 <button
-                  onClick={() => console.log('Price data:', priceData)}
-                  className="px-3 py-1 bg-primary-600/30 rounded-lg text-white hover:bg-primary-600/50 transition-colors text-sm"
+                  onClick={handleExecuteAllPendingTrades}
+                  disabled={isExecutingPendingTrades || isCancellingPendingTrades}
+                  className="px-4 py-2 bg-purple-700 text-white rounded hover:bg-purple-800 disabled:opacity-50 transition-colors"
                 >
-                  Debug Data
+                  {isExecutingPendingTrades ? 'Processing...' : 'Execute Trades'}
+                </button>
+                
+                <button
+                  onClick={handleCancelAllPendingTrades}
+                  disabled={isExecutingPendingTrades || isCancellingPendingTrades}
+                  className="px-4 py-2 bg-red-700 text-white rounded hover:bg-red-800 disabled:opacity-50 transition-colors"
+                >
+                  {isCancellingPendingTrades ? 'Cancelling...' : 'Cancel Trades'}
                 </button>
               </div>
             </div>
-            
-            {/* Data summary for debugging */}
-            <div className="mb-4 p-3 bg-dark-800/50 rounded-lg text-xs text-gray-400 overflow-x-auto">
-              <div>Date Range: {dateRange.start} to {dateRange.end}</div>
-              <div>Data Points: {priceData.length}</div>
-              <div>
-                Types: {priceData.some(d => d.clearedHighPrice !== undefined) ? 'Cleared ' : ''}
-                {priceData.some(d => d.forecastedHighNordpool !== undefined) ? 'Nordpool ' : ''}
-                {priceData.some(d => d.lumaraxHighForecast !== undefined) ? 'LumaraX' : ''}
+            <div className="text-gray-400">
+              {trades.filter(t => t.status === 'pending').length} pending trades available for execution
+            </div>
+          </div>
+
+          <div className="glass-card rounded-lg p-6 mt-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-white">Battery Status</h2>
+              <Battery className="w-6 h-6 text-primary-400" />
+            </div>
+            <div className="grid grid-cols-2 gap-6">
+              <div className={`battery-container h-48 rounded-lg relative ${
+                batteryState.chargingState === 'charging' ? 'bg-green-900/20 border border-green-500/30' : 
+                batteryState.chargingState === 'discharging' ? 'bg-red-900/20 border border-red-500/30' : 
+                'bg-dark-800/30 border border-gray-700/30'
+              }`}>
+                <div 
+                  className={`battery-level absolute bottom-0 w-full transition-all duration-500 ${
+                    batteryState.chargingState === 'charging' ? 'bg-green-500/50' : 
+                    batteryState.chargingState === 'discharging' ? 'bg-red-500/50' : 
+                    'bg-blue-500/50'
+                  }`}
+                  style={{ height: `${batteryState.level || 0}%` }}
+                />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="text-2xl font-bold text-white">
+                    {(batteryState.level || 0).toFixed(1)}%
+                  </span>
+                </div>
+                {batteryState.chargingState !== 'idle' && (
+                  <div className="absolute top-2 right-2">
+                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                      batteryState.chargingState === 'charging' ? 'bg-green-500/30 text-green-300' : 
+                      'bg-red-500/30 text-red-300'
+                    }`}>
+                      {batteryState.chargingState === 'charging' ? 'Charging' : 'Discharging'}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm text-gray-400">Total Capacity</p>
+                  <p className="text-lg font-semibold text-white">{batteryState.capacity.total} MWh</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">Usable Capacity</p>
+                  <p className="text-lg font-semibold text-white">{batteryState.capacity.usable} MWh</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">Current Charge</p>
+                  <p className="text-lg font-semibold text-white">
+                    {((batteryState.level || 0) * batteryState.capacity.total / 100).toFixed(2)} MWh
+                  </p>
+                </div>
+                {batteryState.chargingRate !== undefined && (
+                  <div>
+                    <p className="text-sm text-gray-400">Charging Rate</p>
+                    <p className={`text-lg font-semibold ${
+                      batteryState.chargingRate > 0 ? 'text-green-400' : 
+                      batteryState.chargingRate < 0 ? 'text-red-400' : 
+                      'text-white'
+                    }`}>
+                      {Math.abs(batteryState.chargingRate).toFixed(2)} MWh/h
+                      {batteryState.chargingRate > 0 ? ' (in)' : batteryState.chargingRate < 0 ? ' (out)' : ''}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
-            
-            {/* Price Chart */}
-            <PriceChart data={priceData} />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
@@ -406,13 +792,16 @@ export const TabContent: React.FC<TabContentProps> = ({
                     max={batteryState.capacity.usable}
                     min="0.1"
                     step="0.1"
+                    value={buyQuantity}
+                    onChange={(e) => setBuyQuantity(parseFloat(e.target.value))}
                   />
                 </div>
                 <button 
-                  onClick={() => updateBatteryLevel('buy', 10)}
+                  onClick={handleBuyOrder}
                   className="w-full bg-green-600/80 text-white py-3 px-4 rounded-lg hover:bg-green-500/80 transition-colors shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-300"
+                  disabled={isSubmitting || batteryActionLoading}
                 >
-                  Place Buy Order
+                  {isSubmitting ? 'Placing Order...' : 'Place Buy Order'}
                 </button>
               </div>
             </div>
@@ -464,28 +853,37 @@ export const TabContent: React.FC<TabContentProps> = ({
                     max={batteryState.capacity.usable}
                     min="0.1"
                     step="0.1"
+                    value={sellQuantity}
+                    onChange={(e) => setSellQuantity(parseFloat(e.target.value))}
                   />
                 </div>
                 <button 
-                  onClick={() => updateBatteryLevel('sell', 10)}
+                  onClick={handleSellOrder}
                   className="w-full bg-red-600/80 text-white py-3 px-4 rounded-lg hover:bg-red-500/80 transition-colors shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-300"
+                  disabled={isSubmitting || batteryActionLoading}
                 >
-                  Place Sell Order
+                  {isSubmitting ? 'Placing Order...' : 'Place Sell Order'}
                 </button>
               </div>
             </div>
           </div>
-
-          <BatteryVisualization batteryState={batteryState} />
         </>
       );
 
     case 'dashboard2':
       return (
         <div className="space-y-6">
-          <DateRangeFilter dateRange={dateRange} setDateRange={setDateRange} />
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="flex justify-between items-center">
+            <DateRangeFilter dateRange={dateRange} setDateRange={setDateRange} />
+            <button
+              onClick={() => refetchTrades()}
+              className="px-4 py-2 bg-primary-600/30 rounded-lg text-white hover:bg-primary-600/50 transition-colors"
+            >
+              Refresh Trades
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-6">
             <div className="glass-card rounded-lg p-6">
               <h3 className="text-lg font-semibold text-white mb-4">Total Revenue</h3>
               <p className="text-3xl font-bold text-white">€126,450</p>
@@ -526,41 +924,96 @@ export const TabContent: React.FC<TabContentProps> = ({
           <div className="glass-card rounded-lg p-6">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-semibold text-white">Trading History</h2>
-              <button className="px-4 py-2 bg-primary-600/30 rounded-lg text-white hover:bg-primary-600/50 transition-colors">
-                <Download className="w-4 h-4" />
-              </button>
+              <div className="flex items-center space-x-4">
+                {/* Type filter */}
+                <div className="relative">
+                  <select 
+                    className="bg-primary-700/30 text-white rounded-lg px-4 py-2 appearance-none"
+                    value={filters.type}
+                    onChange={(e) => handleFilterChange('type', e.target.value)}
+                  >
+                    <option value="">All Types</option>
+                    <option value="buy">Buy</option>
+                    <option value="sell">Sell</option>
+                  </select>
+                </div>
+                
+                {/* Status filter */}
+                <div className="relative">
+                  <select 
+                    className="bg-primary-700/30 text-white rounded-lg px-4 py-2 appearance-none"
+                    value={filters.status}
+                    onChange={(e) => handleFilterChange('status', e.target.value)}
+                  >
+                    <option value="">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="executed">Executed</option>
+                    <option value="failed">Failed</option>
+                  </select>
+                </div>
+                
+                <button className="px-4 py-2 bg-primary-600/30 rounded-lg text-white hover:bg-primary-600/50 transition-colors">
+                  <Download className="w-4 h-4" />
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-left text-gray-400">
-                    <th className="pb-4">Type</th>
-                    <th className="pb-4">Price</th>
-                    <th className="pb-4">Quantity</th>
-                    <th className="pb-4">Time</th>
-                    <th className="pb-4">Profit/Loss</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {trades.map((trade) => (
-                    <tr key={trade.id} className="border-t border-gray-700">
-                      <td className="py-4">
-                        <span className={`px-3 py-1 rounded-full text-sm ${
-                          trade.type === 'buy' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                        }`}>
-                          {trade.type}
-                        </span>
-                      </td>
-                      <td className="py-4">€{trade.price.toFixed(2)}</td>
-                      <td className="py-4">{trade.quantity} MWh</td>
-                      <td className="py-4">{new Date(trade.timestamp).toLocaleString()}</td>
-                      <td className={`py-4 ${trade.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        {trade.profit >= 0 ? '+' : ''}{trade.profit.toFixed(2)}€
-                      </td>
+              {tradesLoading ? (
+                <div className="flex justify-center items-center p-8">
+                  <div className="animate-spin w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full"></div>
+                </div>
+              ) : filteredTrades && filteredTrades.length > 0 ? (
+                <table className="w-full">
+                  <thead>
+                    <tr className="text-left text-gray-400">
+                      <th className="pb-4">Type</th>
+                      <th className="pb-4">Price</th>
+                      <th className="pb-4">Quantity</th>
+                      <th className="pb-4">Time</th>
+                      <th className="pb-4">Status</th>
+                      <th className="pb-4">Profit/Loss</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {filteredTrades.map((trade) => (
+                      <tr key={trade.id} className="border-t border-gray-700">
+                        <td className="py-4">
+                          <span className={`px-3 py-1 rounded-full text-sm ${
+                            trade.type === 'buy' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                          }`}>
+                            {trade.type}
+                          </span>
+                        </td>
+                        <td className="py-4">€{trade.price.toFixed(2)}</td>
+                        <td className="py-4">{trade.quantity} MWh</td>
+                        <td className="py-4">{new Date(trade.timestamp).toLocaleString()}</td>
+                        <td className="py-4">
+                          <span className={`px-3 py-1 rounded-full text-sm ${
+                            trade.status === 'executed' ? 'bg-green-500/20 text-green-400' : 
+                            trade.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
+                            'bg-red-500/20 text-red-400'
+                          }`}>
+                            {trade.status || 'pending'}
+                          </span>
+                        </td>
+                        <td className={`py-4 ${trade.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {trade.profit >= 0 ? '+' : ''}{trade.profit.toFixed(2)}€
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="text-center p-8 text-gray-400">
+                  No trades found for the selected filters.
+                  <button 
+                    onClick={() => refetchTrades()} 
+                    className="mt-2 px-3 py-1 bg-primary-600/30 rounded-lg text-white hover:bg-primary-600/50 transition-colors text-sm block mx-auto"
+                  >
+                    Try Again
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1095,6 +1548,98 @@ export const TabContent: React.FC<TabContentProps> = ({
             </div>
           </div>
         </div>
+      );
+
+    case 'battery':
+      return (
+        <>
+          <div className="flex flex-wrap -mx-3">
+            <div className="w-full lg:w-1/2 xl:w-7/12 px-3 mb-5">
+              <div className="bg-darkblue-900 shadow rounded-lg p-4 sm:p-6 h-full">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xl font-bold leading-none text-white">Battery Status</h3>
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={handleExecuteAllPendingTrades}
+                      disabled={isExecutingPendingTrades || isCancellingPendingTrades}
+                      className="px-4 py-2 bg-purple-700 text-white rounded hover:bg-purple-800 disabled:opacity-50 transition-colors"
+                    >
+                      {isExecutingPendingTrades ? 'Processing...' : 'Execute Trades'}
+                    </button>
+                    
+                    <button
+                      onClick={handleCancelAllPendingTrades}
+                      disabled={isExecutingPendingTrades || isCancellingPendingTrades}
+                      className="px-4 py-2 bg-red-700 text-white rounded hover:bg-red-800 disabled:opacity-50 transition-colors"
+                    >
+                      {isCancellingPendingTrades ? 'Cancelling...' : 'Cancel Trades'}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-col h-full">
+                  <BatteryVisualization batteryState={batteryState} />
+                </div>
+              </div>
+            </div>
+
+            <div className="w-full lg:w-1/2 xl:w-5/12 px-3 mb-5">
+              <div className="bg-darkblue-900 shadow rounded-lg p-4 sm:p-6 h-full">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xl font-bold leading-none text-white">Battery Details</h3>
+                </div>
+                <div className="space-y-4">
+                  <div className="bg-darkblue-800 p-4 rounded-lg">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-gray-400 text-sm">Total Capacity</p>
+                        <p className="text-white text-xl font-semibold">{batteryState.capacity.total} MWh</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-400 text-sm">Usable Capacity</p>
+                        <p className="text-white text-xl font-semibold">{batteryState.capacity.usable} MWh</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-400 text-sm">Current Level</p>
+                        <p className="text-white text-xl font-semibold">{batteryState.level}%</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-400 text-sm">Available Energy</p>
+                        <p className="text-white text-xl font-semibold">
+                          {(batteryState.level * batteryState.capacity.total / 100).toFixed(2)} MWh
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-darkblue-800 p-4 rounded-lg">
+                    <h4 className="text-white font-medium mb-3">Pending Trades</h4>
+                    <div className="space-y-2">
+                      {trades.filter(t => t.status === 'pending').length > 0 ? (
+                        trades.filter(t => t.status === 'pending').map((trade, index) => (
+                          <div key={index} className="flex justify-between items-center p-2 bg-darkblue-700 rounded">
+                            <div>
+                              <span className={`px-2 py-1 rounded-full text-xs ${
+                                trade.type === 'buy' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                              }`}>
+                                {trade.type}
+                              </span>
+                              <span className="text-white ml-2">{trade.quantity} MWh</span>
+                            </div>
+                            <div className="text-gray-400 text-sm">
+                              {new Date(trade.timestamp).toLocaleTimeString()}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-gray-400 text-sm">No pending trades</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
       );
     
     default:

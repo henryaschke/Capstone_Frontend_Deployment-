@@ -1,13 +1,16 @@
 import axios from 'axios';
+import type { Trade as TypesTrade } from '../types';
 
 // Show API URL being used for debugging
-const apiUrl = import.meta.env.VITE_API_URL || 'https://fastapi-service-920719150185.us-central1.run.app';
+const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 console.log('Using API URL:', apiUrl);
 
+const BASE_URL = 'http://127.0.0.1:8000';
+
 // Create an API instance with default config
-const api = axios.create({
+export const api = axios.create({
   baseURL: apiUrl,
-  timeout: 10000, // 10 seconds
+  timeout: 30000, // 30 seconds (increased from 10 seconds)
   headers: {
     'Content-Type': 'application/json',
   },
@@ -53,15 +56,7 @@ export interface BatteryHistoryItem {
   amount?: number;
 }
 
-export interface Trade {
-  id?: number;
-  type: 'buy' | 'sell';
-  quantity: number;
-  price: number;
-  timestamp: string;
-  profit_loss?: number;
-  status?: 'pending' | 'completed' | 'cancelled';
-}
+export type Trade = TypesTrade;
 
 export interface PerformanceMetric {
   totalProfit: number;
@@ -130,6 +125,19 @@ export interface Forecast {
 
 // ------ Basic API Functions ------
 
+// Cache storage for price data
+const priceDataCache: {
+  data: any[] | null;
+  timestamp: number;
+  params: Record<string, any>;
+  cacheTTL: number;
+} = {
+  data: null,
+  timestamp: 0,
+  params: {},
+  cacheTTL: 5 * 60 * 1000 // 5 minutes in milliseconds
+};
+
 // Price Data
 export const fetchPriceData = async (startDate?: string, endDate?: string) => {
   try {
@@ -140,13 +148,34 @@ export const fetchPriceData = async (startDate?: string, endDate?: string) => {
     if (startDate) params.start_date = startDate;
     if (endDate) params.end_date = endDate;
     
+    // Check if we have cached data for the same parameters and if it's still fresh
+    const now = Date.now();
+    const paramsMatch = JSON.stringify(params) === JSON.stringify(priceDataCache.params);
+    const cacheIsFresh = (now - priceDataCache.timestamp) < priceDataCache.cacheTTL;
+    
+    if (paramsMatch && cacheIsFresh && priceDataCache.data) {
+      console.log('Returning cached price data (cache age:', 
+        ((now - priceDataCache.timestamp) / 1000).toFixed(0), 'seconds)');
+      return priceDataCache.data;
+    }
+    
+    // Cache miss or expired, proceed with API request
+    console.log('Cache miss or expired, fetching fresh data');
+    
     // First try to get data from the API
     try {
-      const response = await api.get('/api/prices/realtime', { params });
+      const response = await api.get('/api/market-data/realtime', { params });
       console.log('API response:', response.data);
       
       if (response.data && Array.isArray(response.data) && response.data.length > 0) {
-        return processApiResponse(response.data);
+        const processedData = processApiResponse(response.data);
+        
+        // Update cache
+        priceDataCache.data = processedData;
+        priceDataCache.timestamp = now;
+        priceDataCache.params = params;
+        
+        return processedData;
       }
     } catch (error) {
       console.error('Error fetching from primary endpoint:', error);
@@ -156,10 +185,17 @@ export const fetchPriceData = async (startDate?: string, endDate?: string) => {
     // Try alternative endpoint if first one fails
     try {
       const todayStr = new Date().toISOString().split('T')[0];
-      const response = await api.get(`/api/prices/realtime?date=${todayStr}`);
+      const response = await api.get(`/api/market-data/realtime?date=${todayStr}`);
       
       if (response.data && Array.isArray(response.data) && response.data.length > 0) {
-        return processApiResponse(response.data);
+        const processedData = processApiResponse(response.data);
+        
+        // Update cache
+        priceDataCache.data = processedData;
+        priceDataCache.timestamp = now;
+        priceDataCache.params = params;
+        
+        return processedData;
       }
     } catch (error) {
       console.error('Error fetching from secondary endpoint:', error);
@@ -262,80 +298,70 @@ function parseNumericValue(value: any): number | null {
 }
 
 export function generateSamplePriceData(): any[] {
-  const data = [];
-  const now = new Date();
-  const currentHour = now.getHours();
-  const currentMinute = now.getMinutes();
-  
-  // Generate data for every 15 minutes (96 points for a day)
-  for (let hour = 0; hour < 24; hour++) {
-    for (let minute = 0; minute < 60; minute += 15) {
-      // Determine if this point is historical based on current time
-      const isHistorical = (hour < currentHour) || (hour === currentHour && minute <= currentMinute);
-      
-      // Create a time string in HH:MM format
-      const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-      
-      // Base price varies by time of day
-      let basePrice = 100;
-      
-      // Morning peak (7-9 AM)
-      if (hour >= 7 && hour <= 9) {
-        basePrice = 150;
-      }
-      // Evening peak (5-8 PM)
-      else if (hour >= 17 && hour <= 20) {
-        basePrice = 180;
-      }
-      // Night low (11 PM - 5 AM)
-      else if (hour >= 23 || hour <= 5) {
-        basePrice = 70;
-      }
-      
-      // Add some randomness
-      const randomFactor = Math.random() * 30 - 15; // -15 to +15
-      basePrice += randomFactor;
-      
-      // Create data point
-      data.push({
-        time: timeStr,
-        clearedHighPrice: isHistorical ? basePrice + 10 : null,
-        clearedLowPrice: isHistorical ? basePrice - 10 : null,
-        forecastedHighNordpool: !isHistorical ? basePrice + 15 : null,
-        forecastedLowNordpool: !isHistorical ? basePrice - 15 : null,
-        lumaraxHighForecast: !isHistorical ? basePrice + 20 : null,
-        lumaraxLowForecast: !isHistorical ? basePrice - 20 : null,
-        deliveryPeriod: `${timeStr}-${(hour + (minute + 15 >= 60 ? 1 : 0)).toString().padStart(2, '0')}:${((minute + 15) % 60).toString().padStart(2, '0')}`,
-        market: 'Germany',
-        cleared: isHistorical
-      });
-    }
-  }
-  
-  return data;
+  console.warn('Server not reachable - no backup data provided');
+  return []; // Return empty array instead of generating fake data
 }
 
-// Battery Status - use with fallback
+// Battery Status
 export const fetchBatteryStatus = async () => {
   try {
+    // No need to send user_id as it will be extracted from the auth token
     const response = await api.get('/api/battery/status');
-    return response.data;
+    
+    const data = response.data;
+    console.log('Raw battery data from API:', data);
+    
+    // Ensure the correct battery level is returned
+    // The API may return Current_Level or current_level
+    // It may be a percentage (0-100) or an absolute value (0-total_capacity)
+    let level = data.level;
+    if (level === undefined) {
+      level = data.Current_Level !== undefined ? data.Current_Level : data.current_level;
+    }
+    
+    // Get total capacity
+    const totalCapacity = data.Total_Capacity !== undefined ? 
+      data.Total_Capacity : (data.total_capacity !== undefined ? 
+        data.total_capacity : (data.capacity?.total || 2.5));
+    
+    // If level is an absolute value (not a percentage), convert to percentage
+    if (level !== undefined && totalCapacity > 0 && level >= 0 && level <= totalCapacity) {
+      // If level is small compared to capacity, it's likely an absolute value rather than percentage
+      level = (level / totalCapacity) * 100;
+      console.log(`Converting absolute level ${data.Current_Level || data.current_level} to percentage: ${level}%`);
+    }
+    
+    return {
+      level: level !== undefined ? level : 0,
+      capacity: {
+        total: totalCapacity,
+        usable: data.Usable_Capacity !== undefined ? 
+          data.Usable_Capacity : (data.usable_capacity !== undefined ? 
+            data.usable_capacity : (data.capacity?.usable || 2.0))
+      },
+      charging_state: data.charging_state || data.Charging_State || 'idle',
+      charging_rate: data.charging_rate || data.Charging_Rate || 0,
+      last_updated: data.Last_Updated || data.last_updated || new Date().toISOString()
+    };
   } catch (error) {
     console.error('Error fetching battery status:', error);
-    // Return fallback data
+    // Return a default battery status as fallback
     return {
-      level: 50,
+      level: 0,
       capacity: {
         total: 2.5,
         usable: 2.0
       },
-      lastUpdated: new Date().toISOString()
+      charging_state: 'idle',
+      charging_rate: 0,
+      last_updated: new Date().toISOString()
     };
   }
 };
 
 export const fetchBatteryHistory = async (days: number = 7) => {
   try {
+    // No need to include user_id as it will be extracted from the auth token
     const response = await api.get('/api/battery/history', { 
       params: { days } 
     });
@@ -372,27 +398,137 @@ export const dischargeBattery = async (amount: number) => {
 };
 
 // Trades
-export const fetchTradeHistory = async (startDate?: string, endDate?: string, tradeType?: 'buy' | 'sell') => {
+export const fetchTradeHistory = async (startDate?: string, endDate?: string, tradeType?: 'buy' | 'sell', status?: string) => {
   try {
     const params: any = {};
     if (startDate) params.start_date = startDate;
     if (endDate) params.end_date = endDate;
-    if (tradeType) params.type = tradeType;
+    if (tradeType) params.trade_type = tradeType;
+    if (status) params.status = status;
     
-    const response = await api.get('/api/trades/history', { params });
-    return response.data;
+    console.log(`Fetching trade history with params:`, params);
+    
+    // Increase timeout to 30 seconds for this specific API call
+    const response = await api.get('/api/trades/history', { 
+      params, 
+      timeout: 30000 // 30 seconds timeout for trade history
+    });
+    
+    console.log(`Received ${response.data?.length || 0} trades from API`);
+    
+    if (response.data && response.data.length > 0) {
+      console.log('First trade:', response.data[0]);
+    }
+    
+    // Map the API response to match our Trade interface
+    const mappedTrades = response.data.map((trade: any, index: number) => {
+      // Generate a random profit value for visualization purposes
+      // In a real app, this would come from the backend
+      const price = trade.trade_price || 0;
+      const quantity = trade.quantity || 0;
+      const profit = trade.type?.toLowerCase() === 'sell' ? (price * quantity * 0.1) : -(price * quantity * 0.05);
+      
+      // Create a unique id by combining trade_id with index if trade_id is duplicated
+      const tradeId = trade.trade_id?.toString() || Math.random().toString();
+      
+      return {
+        id: `${tradeId}-${index}`, // Make key unique by adding index
+        type: (trade.type?.toLowerCase() === 'sell' ? 'sell' : 'buy') as 'buy' | 'sell',
+        price: price,
+        quantity: quantity,
+        timestamp: trade.timestamp || new Date().toISOString(),
+        executionTime: trade.timestamp || new Date().toISOString(),
+        profit: profit,
+        resolution: `${trade.resolution || 60}m`,
+        deliveryPeriod: trade.timestamp?.substring(11, 16) || "00:00",
+        averagePrice: price,
+        closePrice: price,
+        volume: quantity,
+        status: trade.status || 'pending'
+      };
+    });
+    
+    console.log(`Mapped ${mappedTrades.length} trades`);
+    
+    return mappedTrades;
   } catch (error) {
     console.error('Error fetching trade history:', error);
     return [];
   }
 };
 
-export const executeTrade = async (tradeRequest: Omit<Trade, 'id' | 'timestamp' | 'profit_loss'>) => {
+export interface TradeRequest {
+  type: 'buy' | 'sell';
+  quantity: number;
+  executionTime?: string;
+  resolution?: number;
+  market?: string;
+  trade_id?: number;
+  user_id?: number;
+  price?: number;
+  timestamp?: string;
+}
+
+export const executeTrade = async (tradeRequest: TradeRequest) => {
   try {
     const response = await api.post('/api/trades/execute', tradeRequest);
     return response.data;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error executing trade:', error);
+    
+    // Log more details about the error for debugging
+    if (error.response) {
+      // The request was made and the server responded with an error status
+      console.error('Error response data:', error.response.data);
+      console.error('Error response status:', error.response.status);
+      console.error('Error response headers:', error.response.headers);
+    } else if (error.request) {
+      // The request was made but no response was received
+      console.error('Error request:', error.request);
+    }
+    
+    throw error; // Re-throw the error so the caller can handle it
+  }
+};
+
+// Execute all pending trades
+export const executeAllPendingTrades = async () => {
+  try {
+    const response = await api.post('/api/trades/execute-all-pending');
+    return response.data;
+  } catch (error: any) {
+    console.error('Error executing pending trades:', error);
+    
+    // Log more details about the error for debugging
+    if (error.response) {
+      console.error('Error response data:', error.response.data);
+      console.error('Error response status:', error.response.status);
+      console.error('Error response headers:', error.response.headers);
+    } else if (error.request) {
+      console.error('Error request:', error.request);
+    }
+    
+    throw error;
+  }
+};
+
+// Cancel all pending trades
+export const cancelAllPendingTrades = async () => {
+  try {
+    const response = await api.post('/api/trades/cancel-all-pending');
+    return response.data;
+  } catch (error: any) {
+    console.error('Error cancelling pending trades:', error);
+    
+    // Log more details about the error for debugging
+    if (error.response) {
+      console.error('Error response data:', error.response.data);
+      console.error('Error response status:', error.response.status);
+      console.error('Error response headers:', error.response.headers);
+    } else if (error.request) {
+      console.error('Error request:', error.request);
+    }
+    
     throw error;
   }
 };
@@ -445,7 +581,7 @@ export const register = async (data: RegisterRequest): Promise<{ message: string
   try {
     console.log('Attempting to register user:', data.email);
     
-    const response = await fetch('https://fastapi-service-920719150185.us-central1.run.app/api/auth/register', {
+    const response = await fetch(`${BASE_URL}/api/auth/register`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -478,7 +614,7 @@ export const login = async (data: LoginRequest): Promise<AuthResponse> => {
     formData.append('username', data.username);
     formData.append('password', data.password);
     
-    const response = await fetch('https://fastapi-service-920719150185.us-central1.run.app/api/auth/login', {
+    const response = await fetch(`${BASE_URL}/api/auth/login`, {
       method: 'POST',
       body: formData,
     });
@@ -519,7 +655,7 @@ export const refreshToken = async (): Promise<AuthResponse | null> => {
     const user = getCurrentUser();
     if (!user) return null;
     
-    const response = await axios.post(`${apiUrl}/api/auth/refresh`, {}, {
+    const response = await axios.post(`${BASE_URL}/api/auth/refresh`, {}, {
       headers: {
         Authorization: `Bearer ${user.access_token}`
       }
@@ -550,7 +686,7 @@ export const getUserProfile = async (): Promise<UserProfile> => {
       throw new Error('User not authenticated');
     }
     
-    const response = await fetch('https://fastapi-service-920719150185.us-central1.run.app/api/auth/me', {
+    const response = await fetch(`${BASE_URL}/api/auth/me`, {
       headers: {
         Authorization: `Bearer ${user.access_token}`
       }
@@ -601,6 +737,9 @@ api.interceptors.response.use(
             // Update the stored user with the new token
             localStorage.setItem('user', JSON.stringify(result));
             
+            // Update the auth token in the API instance for all future requests
+            api.defaults.headers.common['Authorization'] = `Bearer ${result.access_token}`;
+            
             // Update the original request with the new token
             originalRequest.headers.Authorization = `Bearer ${result.access_token}`;
             
@@ -609,43 +748,18 @@ api.interceptors.response.use(
           } else {
             console.log('Token refresh failed, redirecting to login');
             logout();
-            window.location.href = '/login';
+            window.location.href = '/login?timeout=true';
             return Promise.reject(error);
           }
-        } else {
-          console.log('No user found in local storage, cannot refresh token');
-          
-          // For GET requests, try to proceed without authentication
-          if (originalRequest.method?.toUpperCase() === 'GET') {
-            console.log('Retrying GET request without authentication');
-            delete originalRequest.headers.Authorization;
-            return api(originalRequest);
-          }
-          
-          logout();
-          window.location.href = '/login';
-          return Promise.reject(error);
         }
       } catch (refreshError) {
-        console.error('Error during token refresh:', refreshError);
-        
-        // If we can't refresh the token, redirect to login
+        console.error('Token refresh error:', refreshError);
         logout();
-        window.location.href = '/login';
+        window.location.href = '/login?timeout=true';
         return Promise.reject(error);
       }
     }
     
-    // Public endpoints should proceed without auth
-    if (error.response?.status === 401 && 
-        (originalRequest.url.includes('/api/status') || 
-         originalRequest.url.includes('/api/auth/login'))) {
-      console.log('Retrying public endpoint without authentication');
-      delete originalRequest.headers.Authorization;
-      return api(originalRequest);
-    }
-    
-    console.error('API Error:', error);
     return Promise.reject(error);
   }
 );
@@ -685,7 +799,7 @@ export const testApiConnection = async () => {
         const todayStr = new Date().toISOString().split('T')[0];
         console.log('Using date:', todayStr);
         
-        const dataTestResponse = await api.get('/api/prices/realtime', { 
+        const dataTestResponse = await api.get('/api/market-data/realtime', { 
           params: { date: todayStr },
           timeout: 15000  // Increased timeout for BigQuery
         });
@@ -703,7 +817,7 @@ export const testApiConnection = async () => {
         return {
           success: true,
           message: 'Successfully connected to API and verified data access',
-          endpoint: '/api/prices/realtime',
+          endpoint: '/api/market-data/realtime',
           dataAvailable: Array.isArray(dataTestResponse.data) && dataTestResponse.data.length > 0,
           config: statusResponse.data?.config || 'Not available',
           sampleData: Array.isArray(dataTestResponse.data) && dataTestResponse.data.length > 0 ? 
@@ -781,7 +895,7 @@ export const testApiConnection = async () => {
       // Check other endpoints as fallbacks
       const endpoints = [
         { url: '/', description: 'API root' },
-        { url: '/api/prices/realtime', params: { date: new Date().toISOString().split('T')[0] }, description: 'Prices realtime endpoint' },
+        { url: '/api/market-data/realtime', params: { date: new Date().toISOString().split('T')[0] }, description: 'Prices realtime endpoint' },
         { url: '/api/market-data', params: { date: new Date().toISOString().split('T')[0] }, description: 'Market data endpoint' }
       ];
       
@@ -838,7 +952,9 @@ export const generateForecasts = async (userId: number = 1, saveToDatabase: bool
   forecasts: Record<string, any[]>;
 }> => {
   try {
-    const response = await api.get(`/api/forecast/test?save_to_database=${saveToDatabase}&user_id=${userId}`);
+    const response = await api.get(`/api/forecast/generate?save_to_database=${saveToDatabase}&user_id=${userId}`, {
+      timeout: 30000 // Keep increased timeout for BigQuery operations
+    });
     return response.data;
   } catch (error) {
     console.error('Error generating forecasts:', error);

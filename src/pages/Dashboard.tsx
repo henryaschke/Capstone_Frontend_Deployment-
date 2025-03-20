@@ -1,10 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LayoutDashboard, LineChart, History, Battery, Calendar, Download, HelpCircle, Book, Lightbulb, AlertCircle, Zap, Clock, Globe, Sparkles, Search, CalendarDays, Wifi, WifiOff, Info } from 'lucide-react';
 import { TabContent } from '../components/TabContent';
-import { usePriceData } from '../hooks/useApi';
+import { usePriceData, useTradeHistory } from '../hooks/useApi';
 import { getPastDate, getFutureDate } from '../utils/dateUtils';
-import { testApiConnection, generateSamplePriceData, fetchPriceData } from '../services/api';
+import { testApiConnection, generateSamplePriceData, fetchPriceData, fetchBatteryStatus, api } from '../services/api';
 import type { Tab, BatteryState, PriceData, Trade, DateRange, MarketData, Forecast } from '../types';
+import { useNavigate } from 'react-router-dom';
+import { TabList, TabPanel, TabPanels, Tabs } from '@chakra-ui/react';
+import { Box, Flex, VStack, Heading, Text } from '@chakra-ui/react';
+import { useAuth } from '../context/AuthContext';
+
+const BASE_URL = 'http://127.0.0.1:8000';
 
 interface NavButtonProps {
   tab: Tab;
@@ -77,6 +83,36 @@ function Dashboard() {
   const [marketData, setMarketData] = useState<MarketData[]>([]);
   const [batteryActionLoading, setBatteryActionLoading] = useState(false);
 
+  // Add trade history state using the hook
+  const { data: tradeHistoryData, loading: tradeHistoryLoading, error: tradeHistoryError, refetch: refetchTradeHistory } = 
+    useTradeHistory(dateRange.start, dateRange.end);
+
+  // Update trades state when tradeHistoryData changes
+  useEffect(() => {
+    console.log('Trade history data updated:', tradeHistoryData);
+    if (tradeHistoryData && tradeHistoryData.length > 0) {
+      console.log(`Setting ${tradeHistoryData.length} trades in state`);
+      // Convert API Trade type to the frontend Trade type if needed
+      setTrades(tradeHistoryData as unknown as Trade[]);
+    }
+  }, [tradeHistoryData]);
+
+  // Refetch trade history when activeTab changes to dashboard2
+  useEffect(() => {
+    if (activeTab === 'dashboard2') {
+      console.log('Dashboard2 tab active, refetching trade history');
+      refetchTradeHistory();
+    }
+  }, [activeTab, refetchTradeHistory]);
+
+  // Also refetch when dateRange changes while on dashboard2
+  useEffect(() => {
+    if (activeTab === 'dashboard2') {
+      console.log('Date range changed, refetching trade history');
+      refetchTradeHistory();
+    }
+  }, [dateRange, activeTab, refetchTradeHistory]);
+
   // Define fetchData function at component level so it can be used anywhere
   const fetchData = async () => {
     try {
@@ -85,10 +121,14 @@ function Dashboard() {
       setPriceError(null);
       
       const today = new Date().toISOString().split('T')[0];
-      const response = await fetch(`https://fastapi-service-920719150185.us-central1.run.app/api/prices/realtime?date=${today}`);
       
-      if (response.ok) {
-        const data = await response.json();
+      // Use api instance instead of direct fetch() call
+      const response = await api.get('/api/market-data/realtime', {
+        params: { date: today }
+      });
+      
+      if (response.status === 200) {
+        const data = response.data;
         console.log('Received price data:', data);
         
         // Log the first item to see its structure
@@ -431,226 +471,8 @@ function Dashboard() {
 
   // Generate sample price data as a fallback
   const generateSamplePriceData = (): PriceData[] => {
-    const data: PriceData[] = [];
-    const now = new Date();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    
-    // Generate data for every 15 minutes (96 points for a day)
-    for (let hour = 0; hour < 24; hour++) {
-      for (let minute = 0; minute < 60; minute += 15) {
-        // Determine if this point is historical based on current time
-        const isHistorical = (hour < currentHour) || (hour === currentHour && minute <= currentMinute);
-        
-        // Create a time string in HH:MM format
-        const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-        
-        // Base price varies by time of day
-        let basePrice = 100;
-        
-        // Morning peak (7-9 AM)
-        if (hour >= 7 && hour <= 9) {
-          basePrice = 150;
-        }
-        // Evening peak (5-8 PM)
-        else if (hour >= 17 && hour <= 20) {
-          basePrice = 180;
-        }
-        // Night low (11 PM - 5 AM)
-        else if (hour >= 23 || hour <= 5) {
-          basePrice = 70;
-        }
-        
-        // Add some randomness
-        const randomFactor = Math.random() * 30 - 15; // -15 to +15
-        basePrice += randomFactor;
-        
-        // Create data points for 15-minute resolution
-        // First, create the cleared data point (only for historical times)
-        if (isHistorical) {
-          data.push({
-            time: timeStr,
-            // 15-minute cleared prices (historical data)
-            clearedHighPrice: basePrice + 10,
-            clearedLowPrice: basePrice - 10,
-            // No forecast data for this point
-            forecastedHighNordpool: null,
-            forecastedLowNordpool: null,
-            // No 30-minute or 60-minute data for this point
-            cleared30HighPrice: null,
-            cleared30LowPrice: null,
-            forecasted30HighNordpool: null,
-            forecasted30LowNordpool: null,
-            cleared60HighPrice: null,
-            cleared60LowPrice: null,
-            forecasted60HighNordpool: null,
-            forecasted60LowNordpool: null,
-            // No LumaraX forecasts for now
-            lumaraxHighForecast: null,
-            lumaraxLowForecast: null,
-            deliveryPeriod: `${timeStr}-${(hour + (minute + 15 >= 60 ? 1 : 0)).toString().padStart(2, '0')}:${((minute + 15) % 60).toString().padStart(2, '0')}`,
-            market: 'Germany',
-            cleared: true,
-            resolutionMinutes: 15
-          });
-        }
-        
-        // Then, create the forecast data point for 15-minute resolution (for all times)
-        data.push({
-          time: timeStr,
-          // No cleared data for this point
-          clearedHighPrice: null,
-          clearedLowPrice: null,
-          // 15-minute Nordpool forecasts
-          forecastedHighNordpool: basePrice + 15,
-          forecastedLowNordpool: basePrice - 15,
-          // No 30-minute or 60-minute data for this point
-          cleared30HighPrice: null,
-          cleared30LowPrice: null,
-          cleared60HighPrice: null,
-          cleared60LowPrice: null,
-          // No LumaraX forecasts for now
-          lumaraxHighForecast: null,
-          lumaraxLowForecast: null,
-          deliveryPeriod: `${timeStr}-${(hour + (minute + 15 >= 60 ? 1 : 0)).toString().padStart(2, '0')}:${((minute + 15) % 60).toString().padStart(2, '0')}`,
-          market: 'Germany',
-          cleared: false,
-          resolutionMinutes: 15
-        });
-        
-        // Only create 30-minute resolution data points for even 15-minute intervals (00, 30)
-        if (minute % 30 === 0) {
-          // Create 30-minute resolution data
-          const timeStr30 = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-          
-          // Add some variation to the base price for 30-minute resolution
-          const basePrice30 = basePrice + 5;
-          
-          // Create cleared data point for 30-minute resolution (only for historical times)
-          if (isHistorical) {
-            data.push({
-              time: timeStr30,
-              // No 15-minute data for this point
-              clearedHighPrice: null,
-              clearedLowPrice: null,
-              forecastedHighNordpool: null,
-              forecastedLowNordpool: null,
-              // 30-minute cleared prices
-              cleared30HighPrice: basePrice30 + 12,
-              cleared30LowPrice: basePrice30 - 8,
-              // No 30-minute forecast data for this point
-              forecasted30HighNordpool: null,
-              forecasted30LowNordpool: null,
-              // No 60-minute data for this point
-              cleared60HighPrice: null,
-              cleared60LowPrice: null,
-              // No LumaraX forecasts for now
-              lumaraxHighForecast: null,
-              lumaraxLowForecast: null,
-              deliveryPeriod: `${timeStr30}-${(hour + (minute + 30 >= 60 ? 1 : 0)).toString().padStart(2, '0')}:${((minute + 30) % 60).toString().padStart(2, '0')}`,
-              market: 'Germany',
-              cleared: true,
-              resolutionMinutes: 30
-            });
-          }
-          
-          // Create forecast data point for 30-minute resolution (for all times)
-          data.push({
-            time: timeStr30,
-            // No 15-minute data for this point
-            clearedHighPrice: null,
-            clearedLowPrice: null,
-            forecastedHighNordpool: null,
-            forecastedLowNordpool: null,
-            // No 30-minute cleared data for this point
-            cleared30HighPrice: null,
-            cleared30LowPrice: null,
-            // 30-minute Nordpool forecasts
-            forecasted30HighNordpool: basePrice30 + 18,
-            forecasted30LowNordpool: basePrice30 - 12,
-            // No 60-minute data for this point
-            cleared60HighPrice: null,
-            cleared60LowPrice: null,
-            forecasted60HighNordpool: null,
-            forecasted60LowNordpool: null,
-            // No LumaraX forecasts for now
-            lumaraxHighForecast: null,
-            lumaraxLowForecast: null,
-            deliveryPeriod: `${timeStr30}-${(hour + (minute + 30 >= 60 ? 1 : 0)).toString().padStart(2, '0')}:${((minute + 30) % 60).toString().padStart(2, '0')}`,
-            market: 'Germany',
-            cleared: false,
-            resolutionMinutes: 30
-          });
-        }
-        
-        // Only create 60-minute resolution data points at the start of each hour (XX:00)
-        if (minute === 0) {
-          // Create 60-minute resolution data
-          const timeStr60 = `${hour.toString().padStart(2, '0')}:00`;
-          
-          // Add some variation to the base price for 60-minute resolution
-          const basePrice60 = basePrice + 10;
-          
-          // Create cleared data point for 60-minute resolution (only for historical times)
-          if (isHistorical) {
-            data.push({
-              time: timeStr60,
-              // No 15-minute or 30-minute data for this point
-              clearedHighPrice: null,
-              clearedLowPrice: null,
-              forecastedHighNordpool: null,
-              forecastedLowNordpool: null,
-              cleared30HighPrice: null,
-              cleared30LowPrice: null,
-              forecasted30HighNordpool: null,
-              forecasted30LowNordpool: null,
-              // 60-minute cleared prices
-              cleared60HighPrice: basePrice60 + 15,
-              cleared60LowPrice: basePrice60 - 5,
-              // No 60-minute forecast data for this point
-              forecasted60HighNordpool: null,
-              forecasted60LowNordpool: null,
-              // No LumaraX forecasts for now
-              lumaraxHighForecast: null,
-              lumaraxLowForecast: null,
-              deliveryPeriod: `${timeStr60}-${(hour + 1).toString().padStart(2, '0')}:00`,
-              market: 'Germany',
-              cleared: true,
-              resolutionMinutes: 60
-            });
-          }
-          
-          // Create forecast data point for 60-minute resolution (for all times)
-          data.push({
-            time: timeStr60,
-            // No 15-minute or 30-minute data for this point
-            clearedHighPrice: null,
-            clearedLowPrice: null,
-            forecastedHighNordpool: null,
-            forecastedLowNordpool: null,
-            cleared30HighPrice: null,
-            cleared30LowPrice: null,
-            forecasted30HighNordpool: null,
-            forecasted30LowNordpool: null,
-            // No 60-minute cleared data for this point
-            cleared60HighPrice: null,
-            cleared60LowPrice: null,
-            // 60-minute Nordpool forecasts
-            forecasted60HighNordpool: basePrice60 + 20,
-            forecasted60LowNordpool: basePrice60 - 10,
-            // No LumaraX forecasts for now
-            lumaraxHighForecast: null,
-            lumaraxLowForecast: null,
-            deliveryPeriod: `${timeStr60}-${(hour + 1).toString().padStart(2, '0')}:00`,
-            market: 'Germany',
-            cleared: false,
-            resolutionMinutes: 60
-          });
-        }
-      }
-    }
-    
-    return data;
+    console.warn('Server not reachable - no backup data provided');
+    return []; // Return empty array instead of generating fake data
   };
 
   // Define fetchMarketData function to get real market data
@@ -658,19 +480,19 @@ function Dashboard() {
     try {
       console.log('Fetching market data from API with date range:', dateRange);
       
-      // Add date range parameters to the API request
-      const url = new URL('https://fastapi-service-920719150185.us-central1.run.app/api/market-data/germany');
+      // Use the API instance from api.ts which has authentication interceptors
+      const params: any = {};
       if (dateRange.start) {
-        url.searchParams.append('start_date', dateRange.start);
+        params.start_date = dateRange.start;
       }
       if (dateRange.end) {
-        url.searchParams.append('end_date', dateRange.end);
+        params.end_date = dateRange.end;
       }
       
-      const response = await fetch(url.toString());
+      const response = await api.get('/api/market-data/germany', { params });
       
-      if (response.ok) {
-        const data = await response.json();
+      if (response.status === 200) {
+        const data = response.data;
         console.log('Received market data:', data);
         
         if (Array.isArray(data) && data.length > 0) {
@@ -733,25 +555,15 @@ function Dashboard() {
         generateSampleMarketData();
       }
     } catch (error) {
-      console.error('Exception fetching market data:', error);
+      console.error('Error fetching market data:', error);
       generateSampleMarketData();
     }
   };
   
   // Generate sample market data as a fallback
   const generateSampleMarketData = () => {
-    const sampleMarketData: MarketData[] = Array.from({ length: 20 }, (_, i) => ({
-      id: `M${i}`,
-      date: new Date(Date.now() - i * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      resolution: ['15min', '30min', '1h'][Math.floor(Math.random() * 3)],
-      deliveryPeriod: `${Math.floor(Math.random() * 24)}:00-${Math.floor(Math.random() * 24)}:00`,
-      lowPrice: 50 + Math.random() * 20,
-      highPrice: 80 + Math.random() * 20,
-      averagePrice: 65 + Math.random() * 20,
-      closePrice: 70 + Math.random() * 20,
-      volume: Math.floor(Math.random() * 1000) + 100
-    }));
-    setMarketData(sampleMarketData);
+    console.warn('Server not reachable - no backup data provided');
+    setMarketData([]); // Set empty array instead of generating fake data
   };
 
   // Initialize demo data
@@ -771,29 +583,13 @@ function Dashboard() {
     }));
     setForecasts(sampleForecasts);
 
-    const initialTrades: Trade[] = Array.from({ length: 10 }, (_, i) => ({
-      id: `T${i + 1}`,
-      type: Math.random() > 0.5 ? 'buy' : 'sell',
-      price: 65 + Math.random() * 20,
-      quantity: Math.floor(Math.random() * 50) + 10,
-      timestamp: new Date(Date.now() - i * 3600000).toISOString(),
-      executionTime: new Date(Date.now() + 3600000).toISOString(),
-      profit: Math.random() * 1000 - 500,
-      resolution: '15min',
-      deliveryPeriod: `${Math.floor(Math.random() * 24)}:00-${Math.floor(Math.random() * 24)}:00`,
-      averagePrice: 70 + Math.random() * 10,
-      closePrice: 75 + Math.random() * 10,
-      volume: Math.floor(Math.random() * 1000) + 100
-    }));
-    setTrades(initialTrades);
-
     // Initial data fetch
     fetchData();
 
     // Set up polling interval
     const interval = setInterval(() => {
       fetchData();
-    }, 30000); // Poll every 30 seconds
+    }, 300000); // Poll every 5 minutes instead of 30 seconds
 
     return () => clearInterval(interval);
   }, []);
@@ -804,17 +600,18 @@ function Dashboard() {
     fetchMarketData();
   }, [dateRange]);
 
+  // Update battery level based on user action (buy/sell)
   const updateBatteryLevel = async (action: 'buy' | 'sell', quantity: number) => {
     try {
       setBatteryActionLoading(true);
+      console.log(`${action.toUpperCase()} action for ${quantity} MWh`);
       
-      // Simulate API call with a short delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
+      // Here you would call an API to update the battery level
+      // For now, we'll just simulate it
       setBatteryState(prev => {
-        const newLevel = Math.max(0, Math.min(100, 
-          action === 'buy' 
-            ? prev.level + (quantity / prev.capacity.usable * 100) 
+        // Calculate new battery level
+        const newLevel = Math.min(100, Math.max(0, action === 'buy'
+            ? prev.level + (quantity / prev.capacity.usable * 100)
             : prev.level - (quantity / prev.capacity.usable * 100)
         ));
 
@@ -823,27 +620,10 @@ function Dashboard() {
         
         const newHistory = [...prev.history.slice(-23), { time: timeStr, level: newLevel }];
 
-        // Safely access price data
-        const lastPrice = Array.isArray(priceData) && priceData.length > 0 
-          ? priceData[priceData.length - 1]?.clearedHighPrice || 0 
-          : 0;
-
-        const newTrade: Trade = {
-          id: `T${Date.now()}`,
-          type: action,
-          price: lastPrice,
-          quantity,
-          timestamp: new Date().toISOString(),
-          executionTime: new Date(selectedTimeWindow.date + 'T' + selectedTimeWindow.time).toISOString(),
-          profit: action === 'sell' ? quantity * 2 : -quantity * 2,
-          resolution: '15min',
-          deliveryPeriod: `${selectedTimeWindow.time}-${selectedTimeWindow.time}`,
-          averagePrice: 70,
-          closePrice: 75,
-          volume: quantity
-        };
-
-        setTrades(prev => [newTrade, ...prev.slice(0, 9)]);
+        // We no longer create mock trades here - all trades should come from the API
+        
+        // After a trade is placed, we should refetch the trade history from the API
+        refetchTradeHistory();
 
         return {
           ...prev,
@@ -970,6 +750,45 @@ function Dashboard() {
     setForecasts(newForecasts);
   };
 
+  useEffect(() => {
+    // Fetch battery data using the imported function
+    const fetchBatteryData = async () => {
+      try {
+        // Directly use the imported function
+        const data = await fetchBatteryStatus();
+        
+        console.log('Battery status from API service:', data);
+        
+        // Set the battery state with the data from the API
+        setBatteryState(prev => ({
+          ...prev,
+          level: data.level || 0,
+          capacity: {
+            ...prev.capacity,
+            total: data.capacity?.total || prev.capacity.total,
+            usable: data.capacity?.usable || prev.capacity.usable,
+            percentage: prev.capacity.percentage
+          },
+          chargingState: data.charging_state || 'idle',
+          chargingRate: data.charging_rate || 0
+        }));
+      } catch (error) {
+        console.error('Error fetching battery status:', error);
+      }
+    };
+    
+    fetchBatteryData();
+    
+    // Set up interval to fetch battery status every 30 seconds
+    const batteryInterval = setInterval(fetchBatteryData, 30000);
+    
+    return () => {
+      clearInterval(batteryInterval);
+    };
+  }, []);
+
+  // Add a try-catch block for the entire render function to prevent the blue screen
+  try {
   return (
     <>
       <nav className="bg-dark-800/30 backdrop-blur-md shadow-lg">
@@ -1029,7 +848,7 @@ function Dashboard() {
             ) : apiConnected ? (
               <div className="flex items-center text-green-400">
                 <Wifi className="h-4 w-4 mr-2" />
-                <span>Connected to API</span>
+                  <span>Connected to LumaraX Energy Systems</span>
               </div>
             ) : (
               <div className="flex items-center text-orange-400">
@@ -1040,12 +859,15 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* Loader for price data */}
-        {priceLoading && !priceData && (
-          <div className="mb-4 p-4 bg-dark-800/50 rounded-lg text-primary-300">
+          {/* Loading message when data is being loaded */}
+          {(!priceData?.length || !trades?.length) && (
+            <div className="mb-4 p-4 bg-blue-900/20 border border-blue-500/50 rounded-lg text-blue-300">
             <div className="flex items-center">
-              <span className="mr-2">Loading price data...</span>
-              <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-primary-400"></div>
+                <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-blue-400 mr-3"></div>
+                <span>Data is loading, please wait...</span>
+              </div>
+              <div className="mt-2 text-sm text-blue-300/80">
+                This may take a few moments as we retrieve the latest market information.
             </div>
           </div>
         )}
@@ -1065,28 +887,6 @@ function Dashboard() {
               className="mt-2 px-3 py-1 bg-red-500/30 hover:bg-red-500/50 rounded text-sm"
             >
               Retry
-            </button>
-          </div>
-        )}
-        
-        {/* Demo data notice */}
-        {!apiConnected && !priceError && (
-          <div className="mb-4 p-4 bg-blue-900/20 border border-blue-500/50 rounded-lg text-blue-300">
-            <div className="flex items-center">
-              <Info className="h-5 w-5 mr-2 text-blue-400" />
-              <span>Demo Mode Active</span>
-            </div>
-            <div className="mt-2 text-sm text-blue-300/80">
-              The application is running in demo mode with simulated data. To view real data, ensure your backend server is running and accessible.
-            </div>
-            <button 
-              onClick={() => {
-                setTimeoutCount(0);
-                setApiConnected(null);
-              }} 
-              className="mt-2 px-3 py-1 bg-blue-500/30 hover:bg-blue-500/50 rounded text-sm"
-            >
-              Check Connection
             </button>
           </div>
         )}
@@ -1113,8 +913,8 @@ function Dashboard() {
         <TabContent
           activeTab={activeTab}
           batteryState={batteryState}
-          priceData={priceData && priceData.length > 0 ? priceData : generateSamplePriceData()}
-          trades={trades}
+            priceData={priceData || []}
+            trades={trades || []}
           dateRange={dateRange}
           priceFilter={priceFilter}
           selectedTimeWindow={selectedTimeWindow}
@@ -1122,14 +922,53 @@ function Dashboard() {
           setSelectedTimeWindow={setSelectedTimeWindow}
           getValidTimeOptions={getValidTimeOptions}
           setDateRange={setDateRange}
-          forecasts={forecasts}
-          marketData={marketData}
+            forecasts={forecasts || []}
+            marketData={marketData || []}
           batteryActionLoading={batteryActionLoading}
           updateForecasts={updateForecasts}
         />
       </main>
     </>
   );
+  } catch (error) {
+    // Render an emergency fallback UI if the entire dashboard fails to render
+    console.error('Critical error rendering dashboard:', error);
+    return (
+      <div className="min-h-screen bg-dark-900 text-white p-6 flex flex-col items-center justify-center">
+        <div className="max-w-2xl w-full bg-dark-800 rounded-lg shadow-xl p-8 border border-red-500/50">
+          <h1 className="text-2xl font-bold text-red-400 mb-4">Application Error</h1>
+          <p className="text-gray-300 mb-4">
+            We've encountered a critical error while rendering the dashboard. This could be due to missing data or a connection issue.
+          </p>
+          <div className="bg-dark-700 p-4 rounded mb-4 overflow-auto max-h-32">
+            <code className="text-red-300 text-sm whitespace-pre-wrap">{error instanceof Error ? error.message : 'Unknown error'}</code>
+          </div>
+          <p className="text-gray-400 mb-6">Please try the following:</p>
+          <ul className="list-disc pl-5 mb-6 text-gray-300">
+            <li>Reload the page</li>
+            <li>Clear your browser cache</li>
+            <li>Log out and log back in</li>
+            <li>Check if the backend server is running</li>
+            <li>Contact support if the problem persists</li>
+          </ul>
+          <div className="flex space-x-4">
+            <button 
+              onClick={() => window.location.reload()} 
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              Reload Page
+            </button>
+            <button 
+              onClick={() => window.location.href = '/login'} 
+              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+            >
+              Return to Login
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 }
 
 export default Dashboard;
