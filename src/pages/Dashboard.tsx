@@ -10,7 +10,7 @@ import { TabList, TabPanel, TabPanels, Tabs } from '@chakra-ui/react';
 import { Box, Flex, VStack, Heading, Text } from '@chakra-ui/react';
 import { useAuth } from '../context/AuthContext';
 
-const BASE_URL = 'http://127.0.0.1:8000';
+const BASE_URL = 'https://fastapi-service-920719150185.us-central1.run.app';
 
 interface NavButtonProps {
   tab: Tab;

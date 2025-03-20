@@ -2,10 +2,10 @@ import axios from 'axios';
 import type { Trade as TypesTrade } from '../types';
 
 // Show API URL being used for debugging
-const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiUrl = import.meta.env.VITE_API_URL || 'https://fastapi-service-920719150185.us-central1.run.app';
 console.log('Using API URL:', apiUrl);
 
-const BASE_URL = 'http://127.0.0.1:8000';
+const BASE_URL = 'https://fastapi-service-920719150185.us-central1.run.app';
 
 // Create an API instance with default config
 export const api = axios.create({
