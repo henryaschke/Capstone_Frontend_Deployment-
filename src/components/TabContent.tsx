@@ -884,40 +884,93 @@ export const TabContent: React.FC<TabContentProps> = ({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-6">
-            <div className="glass-card rounded-lg p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Total Revenue</h3>
-              <p className="text-3xl font-bold text-white">€126,450</p>
-              <p className="text-sm text-green-400 mt-2">+12.5% from last period</p>
+            {/* Total Revenue */}
+            <div className="bg-white rounded-lg shadow p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-500">Total Revenue</p>
+                  <p className="text-2xl font-semibold">
+                    €{trades
+                      .filter(t => t.status === 'executed' && t.type === 'sell')
+                      .reduce((sum, t) => sum + (t.price * t.quantity), 0)
+                      .toFixed(2)}
+                  </p>
+                  <p className="text-sm text-gray-500">From executed SELL trades</p>
+                </div>
+                <div className="bg-green-100 p-2 rounded-full">
+                  <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+              </div>
             </div>
 
-            <div className="glass-card rounded-lg p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Total Profit</h3>
-              <p className="text-3xl font-bold text-green-400">€45,280</p>
-              <p className="text-sm text-green-400 mt-2">+8.3% from last period</p>
+            {/* Total Profit */}
+            <div className="bg-white rounded-lg shadow p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-500">Total Profit</p>
+                  <p className="text-2xl font-semibold">
+                    €{(() => {
+                      const revenue = trades
+                        .filter(t => t.status === 'executed' && t.type === 'sell')
+                        .reduce((sum, t) => sum + (t.price * t.quantity), 0);
+                      const costs = trades
+                        .filter(t => t.status === 'executed' && t.type === 'buy')
+                        .reduce((sum, t) => sum + (t.price * t.quantity), 0);
+                      return (revenue - costs).toFixed(2);
+                    })()}
+                  </p>
+                  <p className="text-sm text-gray-500">Revenue - Costs</p>
+                </div>
+                <div className="bg-blue-100 p-2 rounded-full">
+                  <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                  </svg>
+                </div>
+              </div>
             </div>
 
-            <div className="glass-card rounded-lg p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Total Costs</h3>
-              <p className="text-3xl font-bold text-red-400">€81,170</p>
-              <p className="text-sm text-red-400 mt-2">+15.2% from last period</p>
+            {/* Total Costs */}
+            <div className="bg-white rounded-lg shadow p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-500">Total Costs</p>
+                  <p className="text-2xl font-semibold">
+                    €{trades
+                      .filter(t => t.status === 'executed' && t.type === 'buy')
+                      .reduce((sum, t) => sum + (t.price * t.quantity), 0)
+                      .toFixed(2)}
+                  </p>
+                  <p className="text-sm text-gray-500">From executed BUY trades</p>
+                </div>
+                <div className="bg-red-100 p-2 rounded-full">
+                  <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+              </div>
             </div>
 
-            <div className="glass-card rounded-lg p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Profit Margin</h3>
-              <p className="text-3xl font-bold text-white">35.8%</p>
-              <p className="text-sm text-yellow-400 mt-2">-2.1% from last period</p>
-            </div>
-
-            <div className="glass-card rounded-lg p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Total Traded Volume</h3>
-              <p className="text-3xl font-bold text-white">2,450 MWh</p>
-              <p className="text-sm text-green-400 mt-2">+18.5% from last period</p>
-            </div>
-
-            <div className="glass-card rounded-lg p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Accuracy</h3>
-              <p className="text-3xl font-bold text-white">92%</p>
-              <p className="text-sm text-green-400 mt-2">+3.5% from last period</p>
+            {/* Total Traded Volume */}
+            <div className="bg-white rounded-lg shadow p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-500">Total Traded Volume</p>
+                  <p className="text-2xl font-semibold">
+                    {trades
+                      .filter(t => t.status === 'executed')
+                      .reduce((sum, t) => sum + t.quantity, 0)
+                      .toFixed(2)} MWh
+                  </p>
+                  <p className="text-sm text-gray-500">From executed trades</p>
+                </div>
+                <div className="bg-purple-100 p-2 rounded-full">
+                  <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                  </svg>
+                </div>
+              </div>
             </div>
           </div>
 
