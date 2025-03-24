@@ -6,7 +6,7 @@ import { DateRangeFilter } from './DateRangeFilter';
 import { CustomTradeMarker } from './CustomTradeMarker';
 import PriceChart from './PriceChart';
 import type { Tab, BatteryState, PriceData, Trade, DateRange, MarketData, Forecast } from '../types';
-import { generateForecasts, formatForecasts, fetchSavedForecasts, SavedForecast, executeTrade, TradeRequest, executeAllPendingTrades, cancelAllPendingTrades } from '../services/api';
+import { generateForecasts, formatForecasts, fetchSavedForecasts, SavedForecast, executeTrade, TradeRequest, executeAllPendingTrades, cancelAllPendingTrades, fetchPerformanceMetrics } from '../services/api';
 import { useTradeHistory, useTradeActions } from '../hooks/useApi';
 
 interface TabContentProps {
@@ -626,6 +626,37 @@ export const TabContent: React.FC<TabContentProps> = ({
     }
   };
 
+  // Add performance metrics state
+  const [performanceMetrics, setPerformanceMetrics] = useState({
+    totalRevenue: 0,
+    totalProfit: 0,
+    totalCosts: 0,
+    totalVolume: 0
+  });
+
+  // Add effect to fetch performance metrics when date range changes
+  useEffect(() => {
+    const fetchMetrics = async () => {
+      try {
+        const metrics = await fetchPerformanceMetrics(dateRange.start, dateRange.end);
+        if (metrics) {
+          setPerformanceMetrics({
+            totalRevenue: metrics.total_revenue || 0,
+            totalProfit: metrics.total_profit || 0,
+            totalCosts: metrics.total_costs || 0,
+            totalVolume: metrics.total_volume || 0
+          });
+        }
+      } catch (error) {
+        console.error('Error fetching performance metrics:', error);
+      }
+    };
+
+    if (activeTab === 'dashboard2') {
+      fetchMetrics();
+    }
+  }, [dateRange, activeTab]);
+
   switch (activeTab) {
     case 'dashboard1':
       return (
@@ -890,10 +921,7 @@ export const TabContent: React.FC<TabContentProps> = ({
                 <div>
                   <p className="text-sm text-gray-500">Total Revenue</p>
                   <p className="text-2xl font-semibold">
-                    €{trades
-                      .filter(t => t.status === 'executed' && t.type === 'sell')
-                      .reduce((sum, t) => sum + (t.price * t.quantity), 0)
-                      .toFixed(2)}
+                    €{performanceMetrics.totalRevenue.toFixed(2)}
                   </p>
                   <p className="text-sm text-gray-500">From executed SELL trades</p>
                 </div>
@@ -911,15 +939,7 @@ export const TabContent: React.FC<TabContentProps> = ({
                 <div>
                   <p className="text-sm text-gray-500">Total Profit</p>
                   <p className="text-2xl font-semibold">
-                    €{(() => {
-                      const revenue = trades
-                        .filter(t => t.status === 'executed' && t.type === 'sell')
-                        .reduce((sum, t) => sum + (t.price * t.quantity), 0);
-                      const costs = trades
-                        .filter(t => t.status === 'executed' && t.type === 'buy')
-                        .reduce((sum, t) => sum + (t.price * t.quantity), 0);
-                      return (revenue - costs).toFixed(2);
-                    })()}
+                    €{performanceMetrics.totalProfit.toFixed(2)}
                   </p>
                   <p className="text-sm text-gray-500">Revenue - Costs</p>
                 </div>
@@ -937,10 +957,7 @@ export const TabContent: React.FC<TabContentProps> = ({
                 <div>
                   <p className="text-sm text-gray-500">Total Costs</p>
                   <p className="text-2xl font-semibold">
-                    €{trades
-                      .filter(t => t.status === 'executed' && t.type === 'buy')
-                      .reduce((sum, t) => sum + (t.price * t.quantity), 0)
-                      .toFixed(2)}
+                    €{performanceMetrics.totalCosts.toFixed(2)}
                   </p>
                   <p className="text-sm text-gray-500">From executed BUY trades</p>
                 </div>
@@ -958,10 +975,7 @@ export const TabContent: React.FC<TabContentProps> = ({
                 <div>
                   <p className="text-sm text-gray-500">Total Traded Volume</p>
                   <p className="text-2xl font-semibold">
-                    {trades
-                      .filter(t => t.status === 'executed')
-                      .reduce((sum, t) => sum + t.quantity, 0)
-                      .toFixed(2)} MWh
+                    {performanceMetrics.totalVolume.toFixed(2)} MWh
                   </p>
                   <p className="text-sm text-gray-500">From executed trades</p>
                 </div>

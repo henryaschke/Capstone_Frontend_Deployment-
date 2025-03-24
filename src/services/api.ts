@@ -59,16 +59,18 @@ export interface BatteryHistoryItem {
 export type Trade = TypesTrade;
 
 export interface PerformanceMetric {
-  totalProfit: number;
   totalRevenue: number;
+  totalProfit: number;
+  totalCosts: number;
   profitMargin: number;
-  accuracy: number;
-  totalVolume?: number;
-  totalCosts?: number;
+  totalVolume: number;
+  tradeCount: number;
+  accuracy?: number;
+  currentBalance?: number;
   chartData?: {
     date: string;
-    revenue: number;
     profit: number;
+    revenue: number;
   }[];
 }
 
@@ -422,29 +424,29 @@ export const fetchTradeHistory = async (startDate?: string, endDate?: string, tr
     
     // Map the API response to match our Trade interface
     const mappedTrades = response.data.map((trade: any, index: number) => {
-      // Generate a random profit value for visualization purposes
-      // In a real app, this would come from the backend
-      const price = trade.trade_price || 0;
-      const quantity = trade.quantity || 0;
-      const profit = trade.type?.toLowerCase() === 'sell' ? (price * quantity * 0.1) : -(price * quantity * 0.05);
+      // Use the correct field names from BigQuery
+      const price = trade.Trade_Price || 0;
+      const quantity = trade.Quantity || 0;
+      const tradeType = trade.Trade_Type?.toLowerCase() || 'buy';
       
       // Create a unique id by combining trade_id with index if trade_id is duplicated
-      const tradeId = trade.trade_id?.toString() || Math.random().toString();
+      const tradeId = trade.Trade_ID?.toString() || Math.random().toString();
       
       return {
-        id: `${tradeId}-${index}`, // Make key unique by adding index
-        type: (trade.type?.toLowerCase() === 'sell' ? 'sell' : 'buy') as 'buy' | 'sell',
+        id: `${tradeId}-${index}`,
+        type: tradeType === 'sell' ? 'sell' : 'buy' as 'buy' | 'sell',
         price: price,
         quantity: quantity,
-        timestamp: trade.timestamp || new Date().toISOString(),
-        executionTime: trade.timestamp || new Date().toISOString(),
-        profit: profit,
-        resolution: `${trade.resolution || 60}m`,
-        deliveryPeriod: trade.timestamp?.substring(11, 16) || "00:00",
+        timestamp: trade.Timestamp || new Date().toISOString(),
+        executionTime: trade.Timestamp || new Date().toISOString(),
+        resolution: `${trade.Resolution || 60}m`,
+        deliveryPeriod: trade.Timestamp?.substring(11, 16) || "00:00",
         averagePrice: price,
         closePrice: price,
         volume: quantity,
-        status: trade.status || 'pending'
+        status: trade.Status || 'pending',
+        market: trade.Market || 'nordpool',
+        errorMessage: trade.Error_Message || null
       };
     });
     
@@ -467,27 +469,38 @@ export interface TradeRequest {
   user_id?: number;
   price?: number;
   timestamp?: string;
+  error_message?: string;
 }
 
 export const executeTrade = async (tradeRequest: TradeRequest) => {
   try {
-    const response = await api.post('/api/trades/execute', tradeRequest);
+    // Map the request to match BigQuery table structure
+    const mappedRequest = {
+      Trade_Type: tradeRequest.type.toUpperCase(),
+      Quantity: tradeRequest.quantity,
+      Trade_Price: tradeRequest.price,
+      Timestamp: tradeRequest.timestamp || new Date().toISOString(),
+      Market: tradeRequest.market || 'nordpool',
+      Resolution: tradeRequest.resolution || 60,
+      Status: 'pending',
+      Error_Message: tradeRequest.error_message || null
+    };
+
+    const response = await api.post('/api/trades/execute', mappedRequest);
     return response.data;
   } catch (error: any) {
     console.error('Error executing trade:', error);
     
     // Log more details about the error for debugging
     if (error.response) {
-      // The request was made and the server responded with an error status
       console.error('Error response data:', error.response.data);
       console.error('Error response status:', error.response.status);
       console.error('Error response headers:', error.response.headers);
     } else if (error.request) {
-      // The request was made but no response was received
       console.error('Error request:', error.request);
     }
     
-    throw error; // Re-throw the error so the caller can handle it
+    throw error;
   }
 };
 
@@ -541,14 +554,31 @@ export const fetchPerformanceMetrics = async (startDate?: string, endDate?: stri
     if (endDate) params.end_date = endDate;
     
     const response = await api.get('/api/performance/metrics', { params });
-    return response.data;
+    
+    // Map the response to match our frontend expectations
+    return {
+      totalRevenue: response.data.totalRevenue || 0,
+      totalProfit: response.data.totalProfit || 0,
+      totalCosts: response.data.totalCosts || 0,
+      totalVolume: response.data.totalVolume || 0,
+      profitMargin: response.data.profitMargin || 0,
+      tradeCount: response.data.trade_count || 0,
+      accuracy: response.data.accuracy,
+      currentBalance: response.data.currentBalance,
+      chartData: response.data.chartData || []
+    };
   } catch (error) {
     console.error('Error fetching performance metrics:', error);
     return {
-      totalProfit: 0,
       totalRevenue: 0,
+      totalProfit: 0,
+      totalCosts: 0,
+      totalVolume: 0,
       profitMargin: 0,
-      accuracy: 0
+      tradeCount: 0,
+      accuracy: 0,
+      currentBalance: 0,
+      chartData: []
     };
   }
 };
