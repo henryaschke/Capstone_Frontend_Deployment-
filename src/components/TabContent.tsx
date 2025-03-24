@@ -633,22 +633,32 @@ export const TabContent: React.FC<TabContentProps> = ({
     totalCosts: 0,
     totalVolume: 0
   });
+  
+  // Add loading and error states for performance metrics
+  const [performanceMetricsLoading, setPerformanceMetricsLoading] = useState(false);
+  const [performanceMetricsError, setPerformanceMetricsError] = useState<string | null>(null);
 
   // Add effect to fetch performance metrics when date range changes
   useEffect(() => {
     const fetchMetrics = async () => {
       try {
+        setPerformanceMetricsLoading(true);
+        setPerformanceMetricsError(null);
+        
         const metrics = await fetchPerformanceMetrics(dateRange.start, dateRange.end);
         if (metrics) {
           setPerformanceMetrics({
-            totalRevenue: metrics.total_revenue || 0,
-            totalProfit: metrics.total_profit || 0,
-            totalCosts: metrics.total_costs || 0,
-            totalVolume: metrics.total_volume || 0
+            totalRevenue: metrics.totalRevenue || 0,
+            totalProfit: metrics.totalProfit || 0,
+            totalCosts: metrics.totalCosts || 0,
+            totalVolume: metrics.totalVolume || 0
           });
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error fetching performance metrics:', error);
+        setPerformanceMetricsError(error.message || 'Failed to load performance metrics');
+      } finally {
+        setPerformanceMetricsLoading(false);
       }
     };
 
@@ -914,79 +924,93 @@ export const TabContent: React.FC<TabContentProps> = ({
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-6">
-            {/* Total Revenue */}
-            <div className="bg-white rounded-lg shadow p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-500">Total Revenue</p>
-                  <p className="text-2xl font-semibold">
-                    €{performanceMetrics.totalRevenue.toFixed(2)}
-                  </p>
-                  <p className="text-sm text-gray-500">From executed SELL trades</p>
-                </div>
-                <div className="bg-green-100 p-2 rounded-full">
-                  <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-              </div>
+          {/* Error state */}
+          {performanceMetricsError && (
+            <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-4 mb-4">
+              <p className="text-white">Error loading performance metrics. Please try refreshing.</p>
             </div>
+          )}
 
-            {/* Total Profit */}
-            <div className="bg-white rounded-lg shadow p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-500">Total Profit</p>
-                  <p className="text-2xl font-semibold">
-                    €{performanceMetrics.totalProfit.toFixed(2)}
-                  </p>
-                  <p className="text-sm text-gray-500">Revenue - Costs</p>
-                </div>
-                <div className="bg-blue-100 p-2 rounded-full">
-                  <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                  </svg>
+          {/* Loading state */}
+          {performanceMetricsLoading ? (
+            <div className="flex justify-center items-center p-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-white"></div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-6">
+              {/* Total Revenue */}
+              <div className="bg-white rounded-lg shadow p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-500">Total Revenue</p>
+                    <p className="text-2xl font-semibold">
+                      €{(performanceMetrics?.totalRevenue || 0).toFixed(2)}
+                    </p>
+                    <p className="text-sm text-gray-500">From executed SELL trades</p>
+                  </div>
+                  <div className="bg-green-100 p-2 rounded-full">
+                    <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Total Costs */}
-            <div className="bg-white rounded-lg shadow p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-500">Total Costs</p>
-                  <p className="text-2xl font-semibold">
-                    €{performanceMetrics.totalCosts.toFixed(2)}
-                  </p>
-                  <p className="text-sm text-gray-500">From executed BUY trades</p>
-                </div>
-                <div className="bg-red-100 p-2 rounded-full">
-                  <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
+              {/* Total Profit */}
+              <div className="bg-white rounded-lg shadow p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-500">Total Profit</p>
+                    <p className="text-2xl font-semibold">
+                      €{(performanceMetrics?.totalProfit || 0).toFixed(2)}
+                    </p>
+                    <p className="text-sm text-gray-500">Revenue - Costs</p>
+                  </div>
+                  <div className="bg-blue-100 p-2 rounded-full">
+                    <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                    </svg>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Total Traded Volume */}
-            <div className="bg-white rounded-lg shadow p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-500">Total Traded Volume</p>
-                  <p className="text-2xl font-semibold">
-                    {performanceMetrics.totalVolume.toFixed(2)} MWh
-                  </p>
-                  <p className="text-sm text-gray-500">From executed trades</p>
+              {/* Total Costs */}
+              <div className="bg-white rounded-lg shadow p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-500">Total Costs</p>
+                    <p className="text-2xl font-semibold">
+                      €{(performanceMetrics?.totalCosts || 0).toFixed(2)}
+                    </p>
+                    <p className="text-sm text-gray-500">From executed BUY trades</p>
+                  </div>
+                  <div className="bg-red-100 p-2 rounded-full">
+                    <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
                 </div>
-                <div className="bg-purple-100 p-2 rounded-full">
-                  <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                  </svg>
+              </div>
+
+              {/* Total Traded Volume */}
+              <div className="bg-white rounded-lg shadow p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-500">Total Traded Volume</p>
+                    <p className="text-2xl font-semibold">
+                      {(performanceMetrics?.totalVolume || 0).toFixed(2)} MWh
+                    </p>
+                    <p className="text-sm text-gray-500">From executed trades</p>
+                  </div>
+                  <div className="bg-purple-100 p-2 rounded-full">
+                    <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
           <div className="glass-card rounded-lg p-6">
             <div className="flex items-center justify-between mb-6">

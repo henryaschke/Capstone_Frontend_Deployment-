@@ -549,13 +549,29 @@ export const cancelAllPendingTrades = async () => {
 // Performance Metrics
 export const fetchPerformanceMetrics = async (startDate?: string, endDate?: string) => {
   try {
+    console.log(`Fetching performance metrics from ${startDate} to ${endDate}`);
+    
     const params: any = {};
     if (startDate) params.start_date = startDate;
     if (endDate) params.end_date = endDate;
     
-    const response = await api.get('/api/performance/metrics', { params });
+    console.log('Performance metrics request params:', params);
     
-    // Map the response to match our frontend expectations
+    // Add timeout and retry logic
+    const response = await api.get('/api/performance/metrics', { 
+      params,
+      timeout: 10000 // 10 second timeout
+    });
+    
+    console.log('Performance metrics API response:', response.data);
+    
+    // Check if we have a valid response
+    if (!response.data) {
+      console.error('Empty response from performance metrics API');
+      throw new Error('Empty response from API');
+    }
+    
+    // Map the response to match our frontend expectations with default values for safety
     return {
       totalRevenue: response.data.totalRevenue || 0,
       totalProfit: response.data.totalProfit || 0,
@@ -563,12 +579,29 @@ export const fetchPerformanceMetrics = async (startDate?: string, endDate?: stri
       totalVolume: response.data.totalVolume || 0,
       profitMargin: response.data.profitMargin || 0,
       tradeCount: response.data.trade_count || 0,
-      accuracy: response.data.accuracy,
-      currentBalance: response.data.currentBalance,
-      chartData: response.data.chartData || []
+      accuracy: response.data.accuracy || 0,
+      currentBalance: response.data.currentBalance || 0,
+      chartData: Array.isArray(response.data.chartData) ? response.data.chartData : []
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching performance metrics:', error);
+    
+    // Log detailed error info for debugging
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      console.error('Error response data:', error.response.data);
+      console.error('Error response status:', error.response.status);
+      console.error('Error response headers:', error.response.headers);
+    } else if (error.request) {
+      // The request was made but no response was received
+      console.error('Error request:', error.request);
+    } else {
+      // Something happened in setting up the request that triggered an Error
+      console.error('Error message:', error.message);
+    }
+    
+    // Return a safe fallback object
     return {
       totalRevenue: 0,
       totalProfit: 0,
