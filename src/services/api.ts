@@ -419,38 +419,128 @@ export const fetchTradeHistory = async (startDate?: string, endDate?: string, tr
     console.log(`Received ${response.data?.length || 0} trades from API`);
     
     if (response.data && response.data.length > 0) {
-      console.log('First trade:', response.data[0]);
+      // Log the FULL raw trade data
+      console.log('FULL RAW TRADE DATA FROM API:', JSON.stringify(response.data, null, 2));
+      console.log('FIRST TRADE:', response.data[0]);
+      
+      // Log all field names from the first trade to debug field name issues
+      if (response.data[0]) {
+        console.log('AVAILABLE FIELDS IN FIRST TRADE:', Object.keys(response.data[0]));
+      }
+      
+      // Add debug logging to see what status values are in the trades
+      console.log('STATUS VALUES IN TRADES:');
+      response.data.forEach((trade: any, index: number) => {
+        const statusValue = trade.Status || trade.status;
+        console.log(`Trade ${index}: Status=${statusValue}, Type=${typeof statusValue}`);
+      });
     }
     
     // Map the API response to match our Trade interface
     const mappedTrades = response.data.map((trade: any, index: number) => {
-      // Use the correct field names from BigQuery
-      const price = trade.Trade_Price || 0;
-      const quantity = trade.Quantity || 0;
-      const tradeType = trade.Trade_Type?.toLowerCase() || 'buy';
+      // Debug the incoming trade data with full JSON stringification
+      console.log(`RAW TRADE ${index}:`, JSON.stringify(trade, null, 2));
       
-      // Create a unique id by combining trade_id with index if trade_id is duplicated
-      const tradeId = trade.Trade_ID?.toString() || Math.random().toString();
+      // DIRECT ACCESS TO ALL POSSIBLE FIELD NAMES
+      // Case-insensitive field access function to handle mixed casing
+      const getField = (fieldNames: string[]): any => {
+        for (const name of fieldNames) {
+          if (trade[name] !== undefined) {
+            return trade[name];
+          }
+        }
+        return null;
+      };
       
-      return {
+      // Get the unique ID using all possible field name variations
+      const tradeId = getField(['Trade_ID', 'trade_id', 'tradeId', 'trade_ID', 'TRADE_ID']) || 
+                      `${Date.now()}-${index}`;
+      
+      // Get the trade type using all possible field name variations
+      const rawTradeType = getField(['Trade_Type', 'trade_type', 'tradeType', 'trade_TYPE', 'TRADE_TYPE']);
+      const tradeType = rawTradeType ? rawTradeType.toLowerCase() : 'buy';
+      
+      // Get price with multiple field name possibilities
+      const rawPrice = getField(['Trade_Price', 'trade_price', 'tradePrice', 'TRADE_PRICE', 'Price', 'price']);
+      const price = typeof rawPrice === 'number' ? rawPrice : 
+                   (typeof rawPrice === 'string' ? parseFloat(rawPrice) : 0);
+      
+      // Get quantity with multiple field name possibilities
+      const rawQuantity = getField(['Quantity', 'quantity', 'QUANTITY']);
+      const quantity = typeof rawQuantity === 'number' ? rawQuantity : 
+                      (typeof rawQuantity === 'string' ? parseFloat(rawQuantity) : 0);
+      
+      // Log specific field extraction for debugging
+      console.log(`EXTRACTING FIELDS FOR TRADE ${index}:`, {
+        tradeId,
+        rawTradeType,
+        tradeType,
+        rawPrice,
+        price,
+        rawQuantity,
+        quantity,
+        timestamp: trade.Timestamp || trade.timestamp
+      });
+      
+      // Format timestamp if it exists
+      let formattedTimestamp = new Date().toISOString();
+      const rawTimestamp = getField(['Timestamp', 'timestamp', 'TIMESTAMP']);
+      if (rawTimestamp) {
+        try {
+          // Make sure the timestamp is in a proper format
+          formattedTimestamp = new Date(rawTimestamp).toISOString();
+        } catch (e) {
+          console.error('Error formatting timestamp:', e);
+        }
+      }
+      
+      // Get status with multiple field name possibilities
+      const rawStatus = getField(['Status', 'status', 'STATUS']);
+      const status = rawStatus || 'pending';
+      
+      // Calculate profit for sell trades (revenue - cost)
+      // For buy trades, profit is negative (cost)
+      let profit = 0;
+      if (tradeType === 'sell') {
+        profit = price * quantity;
+      } else if (tradeType === 'buy') {
+        profit = -1 * (price * quantity);
+      }
+      
+      // Get market with multiple field name possibilities
+      const market = getField(['Market', 'market', 'MARKET']) || 'nordpool';
+      
+      // Get resolution with multiple field name possibilities
+      const resolution = getField(['Resolution', 'resolution', 'RESOLUTION']) || 60;
+      
+      // Get error message with multiple field name possibilities
+      const errorMessage = getField(['Error_Message', 'error_message', 'errorMessage', 'ERROR_MESSAGE']);
+      
+      // Check that our fields are set correctly before returning the object
+      const mappedTrade = {
         id: `${tradeId}-${index}`,
-        type: tradeType === 'sell' ? 'sell' : 'buy' as 'buy' | 'sell',
+        type: tradeType === 'sell' ? 'sell' : 'buy',
         price: price,
         quantity: quantity,
-        timestamp: trade.Timestamp || new Date().toISOString(),
-        executionTime: trade.Timestamp || new Date().toISOString(),
-        resolution: `${trade.Resolution || 60}m`,
-        deliveryPeriod: trade.Timestamp?.substring(11, 16) || "00:00",
+        timestamp: formattedTimestamp,
+        executionTime: formattedTimestamp,
+        resolution: `${resolution}m`,
+        deliveryPeriod: formattedTimestamp.substring(11, 16) || "00:00",
         averagePrice: price,
         closePrice: price,
         volume: quantity,
-        status: trade.Status || 'pending',
-        market: trade.Market || 'nordpool',
-        errorMessage: trade.Error_Message || null
+        status: status,
+        market: market,
+        errorMessage: errorMessage,
+        profit: profit
       };
+      
+      console.log(`MAPPED TRADE ${index}:`, mappedTrade);
+      return mappedTrade;
     });
     
-    console.log(`Mapped ${mappedTrades.length} trades`);
+    // Log the final mapped trades for debugging
+    console.log('FINAL MAPPED TRADES:', mappedTrades);
     
     return mappedTrades;
   } catch (error) {
@@ -474,16 +564,15 @@ export interface TradeRequest {
 
 export const executeTrade = async (tradeRequest: TradeRequest) => {
   try {
-    // Map the request to match BigQuery table structure
+    // Map the request to match the backend's expected TradeRequest model
     const mappedRequest = {
-      Trade_Type: tradeRequest.type.toUpperCase(),
-      Quantity: tradeRequest.quantity,
-      Trade_Price: tradeRequest.price,
-      Timestamp: tradeRequest.timestamp || new Date().toISOString(),
-      Market: tradeRequest.market || 'nordpool',
-      Resolution: tradeRequest.resolution || 60,
-      Status: 'pending',
-      Error_Message: tradeRequest.error_message || null
+      type: tradeRequest.type.toLowerCase(), // Backend expects lowercase 'buy' or 'sell'
+      quantity: tradeRequest.quantity,
+      executionTime: tradeRequest.executionTime, // Make sure we use executionTime, not Timestamp
+      resolution: tradeRequest.resolution || 60,
+      market: tradeRequest.market || 'Germany',
+      trade_id: tradeRequest.trade_id,
+      user_id: tradeRequest.user_id
     };
 
     const response = await api.post('/api/trades/execute', mappedRequest);
@@ -560,7 +649,7 @@ export const fetchPerformanceMetrics = async (startDate?: string, endDate?: stri
     // Add timeout and retry logic
     const response = await api.get('/api/performance/metrics', { 
       params,
-      timeout: 10000 // 10 second timeout
+      timeout: 15000 // 15 second timeout
     });
     
     console.log('Performance metrics API response:', response.data);
@@ -571,18 +660,31 @@ export const fetchPerformanceMetrics = async (startDate?: string, endDate?: stri
       throw new Error('Empty response from API');
     }
     
-    // Map the response to match our frontend expectations with default values for safety
-    return {
-      totalRevenue: response.data.totalRevenue || 0,
-      totalProfit: response.data.totalProfit || 0,
-      totalCosts: response.data.totalCosts || 0,
-      totalVolume: response.data.totalVolume || 0,
-      profitMargin: response.data.profitMargin || 0,
-      tradeCount: response.data.trade_count || 0,
-      accuracy: response.data.accuracy || 0,
-      currentBalance: response.data.currentBalance || 0,
-      chartData: Array.isArray(response.data.chartData) ? response.data.chartData : []
+    // Safely extract and normalize the data with type checking
+    const safeResponse = {
+      totalRevenue: typeof response.data.totalRevenue === 'number' ? response.data.totalRevenue : 0,
+      totalProfit: typeof response.data.totalProfit === 'number' ? response.data.totalProfit : 0,
+      totalCosts: typeof response.data.totalCosts === 'number' ? response.data.totalCosts : 0,
+      totalVolume: typeof response.data.totalVolume === 'number' ? response.data.totalVolume : 0,
+      profitMargin: typeof response.data.profitMargin === 'number' ? response.data.profitMargin : 0,
+      tradeCount: typeof response.data.trade_count === 'number' ? response.data.trade_count : 0,
+      accuracy: typeof response.data.accuracy === 'number' ? response.data.accuracy : 0,
+      currentBalance: typeof response.data.currentBalance === 'number' ? response.data.currentBalance : 0,
+      chartData: []
     };
+    
+    // Safely process chart data if available
+    if (Array.isArray(response.data.chartData)) {
+      safeResponse.chartData = response.data.chartData
+        .filter((item: any) => typeof item === 'object' && item !== null)
+        .map((item: any) => ({
+          date: typeof item.date === 'string' ? item.date : new Date().toISOString().split('T')[0],
+          profit: typeof item.profit === 'number' ? item.profit : 0,
+          revenue: typeof item.revenue === 'number' ? item.revenue : 0
+        }));
+    }
+    
+    return safeResponse;
   } catch (error: any) {
     console.error('Error fetching performance metrics:', error);
     
@@ -601,18 +703,12 @@ export const fetchPerformanceMetrics = async (startDate?: string, endDate?: stri
       console.error('Error message:', error.message);
     }
     
-    // Return a safe fallback object
-    return {
-      totalRevenue: 0,
-      totalProfit: 0,
-      totalCosts: 0,
-      totalVolume: 0,
-      profitMargin: 0,
-      tradeCount: 0,
-      accuracy: 0,
-      currentBalance: 0,
-      chartData: []
-    };
+    // Let the UI know what went wrong
+    const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+    error.displayMessage = `Failed to fetch metrics: ${errorMessage}`;
+    
+    // Re-throw the enhanced error
+    throw error;
   }
 };
 

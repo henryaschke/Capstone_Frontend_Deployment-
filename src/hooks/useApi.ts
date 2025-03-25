@@ -139,9 +139,30 @@ export const useTradeHistory = (startDate?: string, endDate?: string, tradeType?
     fetchTradeHistory, startDate, endDate, tradeType, status
   );
   
+  // Add debug log whenever data changes
+  useEffect(() => {
+    if (data) {
+      console.log('Trade history data received in hook:', data);
+      console.log('Trade history data length:', data.length);
+      if (data.length > 0) {
+        console.log('First trade in hook:', data[0]);
+        console.log('Last trade in hook:', data[data.length - 1]);
+      }
+    }
+  }, [data]);
+  
   // Add a function to refetch without date constraints
   const refetchAll = useCallback(() => {
-    return fetchTradeHistory(undefined, undefined, tradeType, status);
+    console.log('Refetching all trades without date filters');
+    return fetchTradeHistory(undefined, undefined, tradeType, status)
+      .then(trades => {
+        console.log(`Refetched ${trades.length} trades without date filters`);
+        return trades;
+      })
+      .catch(error => {
+        console.error('Error refetching all trades:', error);
+        return [];
+      });
   }, [tradeType, status]);
   
   return { 

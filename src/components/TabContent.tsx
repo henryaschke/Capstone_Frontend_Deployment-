@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { LayoutDashboard, LineChart, History, Battery, Calendar, Download, HelpCircle, Book, Lightbulb, AlertCircle, Zap, Clock, Globe, Sparkles, Search, CalendarDays, Plus, BarChart2, Cpu, Database, HardDrive, RefreshCw, Filter, ChevronDown, ChevronUp } from 'lucide-react';
+import { LayoutDashboard, LineChart, History, Battery, Calendar, Download, HelpCircle, Book, Lightbulb, AlertCircle, Zap, Clock, Globe, Sparkles, Search, CalendarDays, Plus, BarChart2, Cpu, Database, HardDrive, RefreshCw, Filter, ChevronDown, ChevronUp, Info } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart as RechartsLineChart, Line, Legend, ReferenceLine, Label } from 'recharts';
 import { BatteryVisualization } from './BatteryVisualization';
 import { DateRangeFilter } from './DateRangeFilter';
@@ -389,13 +389,13 @@ export const TabContent: React.FC<TabContentProps> = ({
       // Create ISO timestamp from the selected date and time
       const executionDateTime = new Date(`${selectedTimeWindow.date}T${selectedTimeWindow.time}:00`);
       
-      // Get current time plus 30 seconds (reduced from 5 minutes)
+      // Get current time plus 5 minutes
       const minExecutionTime = new Date();
-      minExecutionTime.setSeconds(minExecutionTime.getSeconds() + 30);
+      minExecutionTime.setMinutes(minExecutionTime.getMinutes() + 5);
       
-      // Validate execution time is in the future with at least 30 seconds buffer
+      // Validate execution time is in the future with at least 5 minutes buffer
       if (executionDateTime < minExecutionTime) {
-        alert('Execution time must be at least 30 seconds in the future');
+        alert('Execution time must be at least 5 minutes in the future to comply with market rules');
         return;
       }
       
@@ -430,7 +430,12 @@ export const TabContent: React.FC<TabContentProps> = ({
       }
     } catch (error) {
       console.error('Error executing buy trade:', error);
-      alert(`Error placing buy order: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Enhance error messaging to include the 5-minute rule if it's a 400 error
+      let errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      if (errorMessage.includes('422') || errorMessage.includes('400')) {
+        errorMessage = 'Trade execution time must be at least 5 minutes in the future. Please select a later time.';
+      }
+      alert(`Error placing buy order: ${errorMessage}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -457,13 +462,13 @@ export const TabContent: React.FC<TabContentProps> = ({
       // Create ISO timestamp from the selected date and time
       const executionDateTime = new Date(`${selectedTimeWindow.date}T${selectedTimeWindow.time}:00`);
       
-      // Get current time plus 30 seconds (reduced from 5 minutes)
+      // Get current time plus 5 minutes
       const minExecutionTime = new Date();
-      minExecutionTime.setSeconds(minExecutionTime.getSeconds() + 30);
+      minExecutionTime.setMinutes(minExecutionTime.getMinutes() + 5);
       
-      // Validate execution time is in the future with at least 30 seconds buffer
+      // Validate execution time is in the future with at least 5 minutes buffer
       if (executionDateTime < minExecutionTime) {
-        alert('Execution time must be at least 30 seconds in the future');
+        alert('Execution time must be at least 5 minutes in the future to comply with market rules');
         return;
       }
       
@@ -512,6 +517,12 @@ export const TabContent: React.FC<TabContentProps> = ({
         }
       } else if (error.message) {
         errorMessage = error.message;
+      }
+      
+      // Check if the error is related to the execution time constraint
+      if (errorMessage.includes('422') || errorMessage.includes('400') || 
+          errorMessage.includes('future') || errorMessage.includes('time')) {
+        errorMessage = 'Trade execution time must be at least 5 minutes in the future. Please select a later time.';
       }
       
       alert(`Error placing sell order: ${errorMessage}`);
@@ -626,12 +637,30 @@ export const TabContent: React.FC<TabContentProps> = ({
     }
   };
 
+  // Define chart data interface
+  interface ChartDataPoint {
+    date: string;
+    profit: number;
+    revenue: number;
+  }
+
   // Add performance metrics state
-  const [performanceMetrics, setPerformanceMetrics] = useState({
+  const [performanceMetrics, setPerformanceMetrics] = useState<{
+    totalRevenue: number;
+    totalProfit: number;
+    totalCosts: number;
+    totalVolume: number;
+    profitMargin: number;
+    tradeCount: number;
+    chartData: ChartDataPoint[];
+  }>({
     totalRevenue: 0,
     totalProfit: 0,
     totalCosts: 0,
-    totalVolume: 0
+    totalVolume: 0,
+    profitMargin: 0,
+    tradeCount: 0,
+    chartData: []
   });
   
   // Add loading and error states for performance metrics
@@ -647,12 +676,17 @@ export const TabContent: React.FC<TabContentProps> = ({
         
         const metrics = await fetchPerformanceMetrics(dateRange.start, dateRange.end);
         if (metrics) {
-          setPerformanceMetrics({
-            totalRevenue: metrics.totalRevenue || 0,
-            totalProfit: metrics.totalProfit || 0,
-            totalCosts: metrics.totalCosts || 0,
-            totalVolume: metrics.totalVolume || 0
-          });
+          // Create a safe copy with only primitive values
+          const safeMetrics = {
+            totalRevenue: typeof metrics.totalRevenue === 'number' ? metrics.totalRevenue : 0,
+            totalProfit: typeof metrics.totalProfit === 'number' ? metrics.totalProfit : 0,
+            totalCosts: typeof metrics.totalCosts === 'number' ? metrics.totalCosts : 0,
+            totalVolume: typeof metrics.totalVolume === 'number' ? metrics.totalVolume : 0,
+            profitMargin: typeof metrics.profitMargin === 'number' ? metrics.profitMargin : 0,
+            tradeCount: typeof metrics.tradeCount === 'number' ? metrics.tradeCount : 0,
+            chartData: [] // Just use empty array for now to avoid rendering issues
+          };
+          setPerformanceMetrics(safeMetrics);
         }
       } catch (error: any) {
         console.error('Error fetching performance metrics:', error);
@@ -667,6 +701,32 @@ export const TabContent: React.FC<TabContentProps> = ({
     }
   }, [dateRange, activeTab]);
 
+  // Add new effect to set date range to current month when dashboard2 tab becomes active
+  useEffect(() => {
+    if (activeTab === 'dashboard2') {
+      // Set date range to last 7 days plus tomorrow
+      const today = new Date();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      const sevenDaysAgo = new Date(today);
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      
+      const startDateStr = sevenDaysAgo.toISOString().split('T')[0];
+      const endDateStr = tomorrow.toISOString().split('T')[0];
+      
+      console.log(`Setting date range to last 7 days plus tomorrow: ${startDateStr} to ${endDateStr}`);
+      
+      // Only update if the date range is different to avoid infinite loops
+      if (dateRange.start !== startDateStr || dateRange.end !== endDateStr) {
+        setDateRange({
+          start: startDateStr,
+          end: endDateStr
+        });
+      }
+    }
+  }, [activeTab]);
+  
   switch (activeTab) {
     case 'dashboard1':
       return (
@@ -674,6 +734,10 @@ export const TabContent: React.FC<TabContentProps> = ({
           <div className="glass-card rounded-lg p-6">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-white">Energy Price Data</h2>
+              <div className="flex items-center space-x-2 px-3 py-1 bg-dark-800/70 rounded-full">
+                <div className="w-2 h-2 rounded-full bg-sky-500 animate-pulse"></div>
+                <span className="text-sky-300 text-sm font-medium">Live Chart with Current Time Indicator</span>
+              </div>
             </div>
             
             {/* Empty state message if no data */}
@@ -688,7 +752,7 @@ export const TabContent: React.FC<TabContentProps> = ({
             
             {/* Only render PriceChart if we have data */}
             {priceData && priceData.length > 0 && (
-              <PriceChart data={priceData} />
+              <PriceChart data={priceData} trades={trades} />
             )}
           </div>
 
@@ -716,6 +780,15 @@ export const TabContent: React.FC<TabContentProps> = ({
             <div className="text-gray-400">
               {trades.filter(t => t.status === 'pending').length} pending trades available for execution
             </div>
+          </div>
+          
+          {/* Help tooltip about the chart */}
+          <div className="mt-4 text-sm text-gray-500 flex items-start space-x-2">
+            <AlertCircle className="w-4 h-4 mt-0.5" />
+            <p>
+              The vertical line indicates the current time. Use the chart to identify energy price patterns and make informed trading decisions.
+              Your pending and executed trades also appear on the chart automatically.
+            </p>
           </div>
 
           <div className="glass-card rounded-lg p-6 mt-6">
@@ -920,96 +993,139 @@ export const TabContent: React.FC<TabContentProps> = ({
               onClick={() => refetchTrades()}
               className="px-4 py-2 bg-primary-600/30 rounded-lg text-white hover:bg-primary-600/50 transition-colors"
             >
-              Refresh Trades
+              Refresh Data
             </button>
           </div>
 
           {/* Error state */}
           {performanceMetricsError && (
             <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-4 mb-4">
-              <p className="text-white">Error loading performance metrics. Please try refreshing.</p>
+              <div className="flex items-center">
+                <AlertCircle className="w-5 h-5 text-red-400 mr-2" />
+                <p className="text-white">Error loading performance metrics: {performanceMetricsError}</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setPerformanceMetricsError(null);
+                  setPerformanceMetricsLoading(true);
+                  fetchPerformanceMetrics(dateRange.start, dateRange.end)
+                    .then(metrics => {
+                      if (metrics) {
+                        try {
+                          // Defensive copy and validation
+                          const safeMetrics = {
+                            totalRevenue: typeof metrics.totalRevenue === 'number' ? metrics.totalRevenue : 0,
+                            totalProfit: typeof metrics.totalProfit === 'number' ? metrics.totalProfit : 0,
+                            totalCosts: typeof metrics.totalCosts === 'number' ? metrics.totalCosts : 0,
+                            totalVolume: typeof metrics.totalVolume === 'number' ? metrics.totalVolume : 0,
+                            profitMargin: typeof metrics.profitMargin === 'number' ? metrics.profitMargin : 0,
+                            tradeCount: typeof metrics.tradeCount === 'number' ? metrics.tradeCount : 0,
+                            chartData: [] // Just use empty array for now to fix rendering issues
+                          };
+
+                          setPerformanceMetrics(safeMetrics);
+                        } catch (e) {
+                          console.error('Error processing metrics data:', e);
+                          setPerformanceMetricsError('Failed to process metrics data');
+                        }
+                      }
+                      setPerformanceMetricsLoading(false);
+                    })
+                    .catch(err => {
+                      setPerformanceMetricsError(err.message || 'Failed to load metrics');
+                      setPerformanceMetricsLoading(false);
+                    });
+                }}
+                className="mt-2 text-white bg-red-500/30 hover:bg-red-500/50 px-3 py-1 rounded-md text-sm"
+              >
+                Retry
+              </button>
             </div>
           )}
 
           {/* Loading state */}
           {performanceMetricsLoading ? (
-            <div className="flex justify-center items-center p-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-white"></div>
+            <div className="flex justify-center items-center p-12 glass-card rounded-lg">
+              <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-white"></div>
+              <p className="ml-4 text-white">Loading performance data...</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-6">
-              {/* Total Revenue */}
-              <div className="bg-white rounded-lg shadow p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">Total Revenue</p>
-                    <p className="text-2xl font-semibold">
-                      €{(performanceMetrics?.totalRevenue || 0).toFixed(2)}
-                    </p>
-                    <p className="text-sm text-gray-500">From executed SELL trades</p>
-                  </div>
-                  <div className="bg-green-100 p-2 rounded-full">
-                    <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
+            <>
+              {/* Metrics Cards - with safe rendering */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                {/* Total Revenue */}
+                <div className="glass-card rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-300">Total Revenue</p>
+                      <p className="text-2xl font-semibold text-white">
+                        €{(performanceMetrics?.totalRevenue || 0).toFixed(2)}
+                      </p>
+                      <p className="text-sm text-gray-400">From executed SELL trades</p>
+                    </div>
+                    <div className="bg-green-500/20 p-2 rounded-full">
+                      <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Total Profit */}
-              <div className="bg-white rounded-lg shadow p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">Total Profit</p>
-                    <p className="text-2xl font-semibold">
-                      €{(performanceMetrics?.totalProfit || 0).toFixed(2)}
-                    </p>
-                    <p className="text-sm text-gray-500">Revenue - Costs</p>
-                  </div>
-                  <div className="bg-blue-100 p-2 rounded-full">
-                    <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                    </svg>
+                {/* Total Profit */}
+                <div className="glass-card rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-300">Total Profit</p>
+                      <p className="text-2xl font-semibold text-white">
+                        €{(performanceMetrics?.totalProfit || 0).toFixed(2)}
+                      </p>
+                      <p className="text-sm text-gray-400">Revenue - Costs</p>
+                    </div>
+                    <div className="bg-blue-500/20 p-2 rounded-full">
+                      <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                      </svg>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Total Costs */}
-              <div className="bg-white rounded-lg shadow p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">Total Costs</p>
-                    <p className="text-2xl font-semibold">
-                      €{(performanceMetrics?.totalCosts || 0).toFixed(2)}
-                    </p>
-                    <p className="text-sm text-gray-500">From executed BUY trades</p>
-                  </div>
-                  <div className="bg-red-100 p-2 rounded-full">
-                    <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
+                {/* Total Costs */}
+                <div className="glass-card rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-300">Total Costs</p>
+                      <p className="text-2xl font-semibold text-white">
+                        €{(performanceMetrics?.totalCosts || 0).toFixed(2)}
+                      </p>
+                      <p className="text-sm text-gray-400">From executed BUY trades</p>
+                    </div>
+                    <div className="bg-red-500/20 p-2 rounded-full">
+                      <svg className="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Total Traded Volume */}
-              <div className="bg-white rounded-lg shadow p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">Total Traded Volume</p>
-                    <p className="text-2xl font-semibold">
-                      {(performanceMetrics?.totalVolume || 0).toFixed(2)} MWh
-                    </p>
-                    <p className="text-sm text-gray-500">From executed trades</p>
-                  </div>
-                  <div className="bg-purple-100 p-2 rounded-full">
-                    <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                    </svg>
+                {/* Total Traded Volume */}
+                <div className="glass-card rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-300">Total Traded Volume</p>
+                      <p className="text-2xl font-semibold text-white">
+                        {(performanceMetrics?.totalVolume || 0).toFixed(2)} MWh
+                      </p>
+                      <p className="text-sm text-gray-400">From executed trades</p>
+                    </div>
+                    <div className="bg-purple-500/20 p-2 rounded-full">
+                      <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                      </svg>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </>
           )}
 
           <div className="glass-card rounded-lg p-6">
@@ -1037,9 +1153,9 @@ export const TabContent: React.FC<TabContentProps> = ({
                     onChange={(e) => handleFilterChange('status', e.target.value)}
                   >
                     <option value="">All Statuses</option>
-                    <option value="pending">Pending</option>
-                    <option value="executed">Executed</option>
-                    <option value="failed">Failed</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Executed">Executed</option>
+                    <option value="Failed">Failed</option>
                   </select>
                 </div>
                 
@@ -1062,36 +1178,50 @@ export const TabContent: React.FC<TabContentProps> = ({
                       <th className="pb-4">Quantity</th>
                       <th className="pb-4">Time</th>
                       <th className="pb-4">Status</th>
-                      <th className="pb-4">Profit/Loss</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredTrades.map((trade) => (
-                      <tr key={trade.id} className="border-t border-gray-700">
-                        <td className="py-4">
-                          <span className={`px-3 py-1 rounded-full text-sm ${
-                            trade.type === 'buy' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                          }`}>
-                            {trade.type}
-                          </span>
-                        </td>
-                        <td className="py-4">€{trade.price.toFixed(2)}</td>
-                        <td className="py-4">{trade.quantity} MWh</td>
-                        <td className="py-4">{new Date(trade.timestamp).toLocaleString()}</td>
-                        <td className="py-4">
-                          <span className={`px-3 py-1 rounded-full text-sm ${
-                            trade.status === 'executed' ? 'bg-green-500/20 text-green-400' : 
-                            trade.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
-                            'bg-red-500/20 text-red-400'
-                          }`}>
-                            {trade.status || 'pending'}
-                          </span>
-                        </td>
-                        <td className={`py-4 ${trade.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                          {trade.profit >= 0 ? '+' : ''}{trade.profit.toFixed(2)}€
-                        </td>
-                      </tr>
-                    ))}
+                    {/* Regular trade rows */}
+                    {filteredTrades.map((trade, index) => {
+                      // Ensure we have numbers for calculations
+                      const price = typeof trade.price === 'number' ? trade.price : 
+                                   (typeof trade.price === 'string' ? parseFloat(trade.price) : 0);
+                      
+                      const quantity = typeof trade.quantity === 'number' ? trade.quantity : 
+                                      (typeof trade.quantity === 'string' ? parseFloat(trade.quantity) : 0);
+                      
+                      return (
+                        <tr key={trade.id || index} className="border-t border-gray-700">
+                          <td className="py-4">
+                            <span className={`px-3 py-1 rounded-full text-sm ${
+                              trade.type === 'buy' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                            }`}>
+                              {trade.type}
+                            </span>
+                          </td>
+                          <td className="py-4">€{price.toFixed(2)}</td>
+                          <td className="py-4">{quantity.toFixed(1)} MWh</td>
+                          <td className="py-4">{new Date(trade.timestamp).toLocaleString()}</td>
+                          <td className="py-4">
+                            <span className={`px-3 py-1 rounded-full text-sm ${
+                              (trade.status || '').toLowerCase() === 'executed' ? 'bg-green-500/20 text-green-400' : 
+                              (trade.status || '').toLowerCase() === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
+                              'bg-red-500/20 text-red-400'
+                            }`}
+                            title={trade.errorMessage ? `Info: ${trade.errorMessage}` : ''}
+                            >
+                              {trade.status || 'pending'}
+                            </span>
+                            {trade.errorMessage && (
+                              <span className="ml-2 text-xs text-gray-400 inline-flex items-center cursor-help" title={trade.errorMessage}>
+                                <Info className="w-3 h-3 mr-1" />
+                                <span className="hidden md:inline">{trade.errorMessage.length > 30 ? trade.errorMessage.substring(0, 30) + '...' : trade.errorMessage}</span>
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               ) : (
@@ -1580,61 +1710,90 @@ export const TabContent: React.FC<TabContentProps> = ({
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="glass-card rounded-lg p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-semibold text-white">Trading Guidelines</h2>
-                <Lightbulb className="w-6 h-6 text-primary-400" />
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">Trading Guidelines</h3>
+                <HelpCircle className="w-5 h-5 text-primary-400" />
               </div>
-              <div className="space-y-4">
-                <div className="p-4 rounded-lg bg-dark-800/30">
-                  <h3 className="text-white font-medium mb-2">Risk Management</h3>
-                  <ul className="list-disc list-inside text-gray-400 text-sm space-y-2">
-                    <li>Always set stop-loss orders</li>
-                    <li>Don&apos;t risk more than 2% per trade</li>
-                    <li>Maintain a balanced portfolio</li>
-                    <li>Monitor market volatility</li>
-                  </ul>
-                </div>
-                <div className="p-4 rounded-lg bg-dark-800/30">
-                  <h3 className="text-white font-medium mb-2">Best Practices</h3>
-                  <ul className="list-disc list-inside text-gray-400 text-sm space-y-2">
-                    <li>Keep detailed trading records</li>
-                    <li>Review performance regularly</li>
-                    <li>Stay updated with market news</li>
-                    <li>Follow your trading plan</li>
-                  </ul>
-                </div>
-              </div>
+              
+              <p className="text-gray-300 mb-6">
+                Our products and prices can be delayed by up to one hour. For real-time updates, check Epex Spot or Nordpool group websites.
+              </p>
+              
+              <h4 className="text-white font-medium mb-2">Best Practices</h4>
+              <ul className="space-y-2 text-gray-300">
+                <li className="flex items-start">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary-400 mt-1.5 mr-2"></div>
+                  Keep detailed trading records
+                </li>
+                <li className="flex items-start">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary-400 mt-1.5 mr-2"></div>
+                  Review performance regularly
+                </li>
+                <li className="flex items-start">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary-400 mt-1.5 mr-2"></div>
+                  Stay updated with market news
+                </li>
+                <li className="flex items-start">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary-400 mt-1.5 mr-2"></div>
+                  Follow your trading plan
+                </li>
+              </ul>
+              
+              <h4 className="text-white font-medium mt-6 mb-2">Platform Features</h4>
+              <ul className="space-y-2 text-gray-300">
+                <li className="flex items-start">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary-400 mt-1.5 mr-2"></div>
+                  Trading in 15, 30, and 60-minute resolutions
+                </li>
+                <li className="flex items-start">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary-400 mt-1.5 mr-2"></div>
+                  Battery management with charge/discharge tracking
+                </li>
+                <li className="flex items-start">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary-400 mt-1.5 mr-2"></div>
+                  Scheduled future trades with automatic execution
+                </li>
+                <li className="flex items-start">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary-400 mt-1.5 mr-2"></div>
+                  Performance tracking and trade history
+                </li>
+              </ul>
             </div>
-
+            
             <div className="glass-card rounded-lg p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-semibold text-white">FAQ</h2>
-                <HelpCircle className="w-6 h-6 text-primary-400" />
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">FAQ</h3>
+                <HelpCircle className="w-5 h-5 text-primary-400" />
               </div>
-              <div className="space-y-4">
-                {[
-                  {
-                    question: "How do I start trading?",
-                    answer: "Begin by reviewing the Quick Start Guide and setting up your trading parameters in the Algorithm section."
-                  },
-                  {
-                    question: "What are the trading hours?",
-                    answer: "Trading is available 24/7, but the most active periods are during European market hours."
-                  },
-                  {
-                    question: "How is profit calculated?",
-                    answer: "Profits are calculated based on the difference between buy and sell prices, minus any applicable fees."
-                  },
-                  {
-                    question: "Is the platform secure?",
-                    answer: "Yes, we implement industry-standard security measures and regular security audits."
-                  }
-                ].map((item, index) => (
-                  <div key={index} className="p-4 rounded-lg bg-dark-800/30">
-                    <h3 className="text-white font-medium mb-2">{item.question}</h3>
-                    <p className="text-gray-400 text-sm">{item.answer}</p>
-                  </div>
-                ))}
+              
+              <div className="space-y-6">
+                <div>
+                  <h4 className="text-white font-medium mb-2">What are the trading hours?</h4>
+                  <p className="text-gray-300">
+                    Trading is available 24/7, but the most active periods are during European market hours.
+                  </p>
+                </div>
+                
+                <div>
+                  <h4 className="text-white font-medium mb-2">How is profit calculated?</h4>
+                  <p className="text-gray-300">
+                    Profits are calculated based on the difference between buy and sell prices, minus any applicable fees.
+                  </p>
+                </div>
+                
+                <div>
+                  <h4 className="text-white font-medium mb-2">Is the platform secure?</h4>
+                  <p className="text-gray-300">
+                    Yes, we implement industry-standard security measures and regular security audits.
+                  </p>
+                </div>
+                
+                <div>
+                  <h4 className="text-white font-medium mb-2">Why might trades stay pending?</h4>
+                  <p className="text-gray-300">
+                    Trades may remain pending if execution time is in the future, market data is not yet available, or prices have not yet cleared in the market.
+                  </p>
+                </div>
               </div>
             </div>
           </div>

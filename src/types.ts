@@ -71,6 +71,7 @@ export interface Trade {
   closePrice: number;
   volume: number;
   status?: 'pending' | 'executed' | 'failed' | 'completed' | 'cancelled';
+  errorMessage?: string;
 }
 
 export interface DateRange {
